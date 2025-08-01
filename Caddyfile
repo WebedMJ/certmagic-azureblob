@@ -1,0 +1,10 @@
+{
+	storage azureblob {
+		account_name {$AZURE_STORAGE_ACCOUNT}
+		container_name caddy-data
+		connection_string {$AZURE_STORAGE_CONNECTION_STRING}
+	}
+}
+
+localhost
+respond "Hello Caddy with Azure Blob Storage!"
