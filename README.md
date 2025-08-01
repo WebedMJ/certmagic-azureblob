@@ -4,6 +4,18 @@ This library allows you to use Azure Blob Storage as key/certificate storage bac
 
 ## Usage
 
+### Azure Storage Account
+
+Recommendations to enhance security:
+
+- **Enable infrastructure encryption** during storage account creation for double encryption at rest.
+- **Use customer-managed keys** for storage service encryption and leverage Key Vault key rotation policy.
+- **Apply least privilege RBAC controls** - grant only the minimum required permissions (e.g., `Storage Blob Data Contributor` for the container).
+- **Use managed identity authentication** where possible and disable storage account key access.
+- **Apply storage account network restrictions** - configure firewalls, virtual networks, or private endpoints to limit access.
+- **Enable blob versioning and soft delete** to protect against accidental deletion or corruption of certificates.
+- **Monitor access** with Azure Storage Analytics and set up alerts for unusual access patterns.
+
 ### Caddy
 
 In this section, we create a Caddy config using our Azure Blob Storage backend.

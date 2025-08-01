@@ -140,10 +140,12 @@ func (s *Storage) Delete(ctx context.Context, key string) error {
 
 	_, err := blobClient.Delete(ctx, nil)
 	if err != nil {
-		// Check if blob doesn't exist - this is not an error for Azure Blob Storage
+		// Check if blob doesn't exist (404 error)
 		var responseError *azcore.ResponseError
 		if errors.As(err, &responseError) && responseError.StatusCode == 404 {
-			// Blob doesn't exist, but that's not an error for delete operation
+			// Blob doesn't exist - this is OK for Delete (idempotent behavior)
+			// CertMagic interface: "error should be returned only if key still exists"
+			// Since key doesn't exist, we return success
 			return nil
 		}
 		return fmt.Errorf("deleting blob %s: %w", key, err)

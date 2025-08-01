@@ -91,15 +91,37 @@ func TestAzureBlobStorageOperations(t *testing.T) {
 	assert.False(t, exists)
 }
 
-func TestDeleteNonExistentKey(t *testing.T) {
+func TestDeleteBehaviorVerification(t *testing.T) {
 	s := setupTestStorage(t)
 	ctx := context.Background()
 
-	// Try to delete a non-existent key
-	err := s.Delete(ctx, "/does/not/exist")
-	// For Azure Blob Storage, deleting non-existent blob doesn't return error
-	// This is different from GCS behavior, but matches Azure Storage semantics
-	assert.NoError(t, err)
+	testKey := "delete-behavior-test/test-file.txt"
+	testContent := []byte("test content for delete behavior")
+
+	// First, test deleting an existing key
+	err := s.Store(ctx, testKey, testContent)
+	require.NoError(t, err, "Should be able to store test file")
+
+	exists := s.Exists(ctx, testKey)
+	assert.True(t, exists, "File should exist after storing")
+
+	// Delete existing key should succeed
+	err = s.Delete(ctx, testKey)
+	assert.NoError(t, err, "Delete of existing key should succeed")
+
+	exists = s.Exists(ctx, testKey)
+	assert.False(t, exists, "File should not exist after deletion")
+
+	// Second, test deleting the same (now non-existent) key again
+	err = s.Delete(ctx, testKey)
+	assert.NoError(t, err, "Delete of non-existent key should succeed (idempotent)")
+
+	// Third, test deleting a completely different non-existent key
+	nonExistentKey := fmt.Sprintf("never-existed-%d.txt", time.Now().UnixNano())
+	err = s.Delete(ctx, nonExistentKey)
+	assert.NoError(t, err, "Delete of never-existing key should succeed (idempotent)")
+
+	t.Log("Verified: Azure Blob Storage Delete operations are idempotent as required by CertMagic interface")
 }
 
 func TestListOperations(t *testing.T) {
