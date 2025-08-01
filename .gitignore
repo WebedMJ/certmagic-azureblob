@@ -34,3 +34,6 @@ go.work.sum
 # Azurite
 __blobstorage__**
 __azurite*.json
+
+# Test Caddyfiles
+Caddyfile
