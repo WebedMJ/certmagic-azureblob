@@ -18,6 +18,8 @@ var (
 )
 
 // CaddyStorageAzureBlob implements a caddy storage backend for Azure Blob Storage.
+//
+//nolint:govet // fieldalignment: struct field order optimized for readability over memory
 type CaddyStorageAzureBlob struct {
 	// AccountName is the Azure Storage account name.
 	AccountName string `json:"account_name"`

@@ -280,10 +280,10 @@ func TestCreatePersistentFiles(t *testing.T) {
 	// Create some test files that we won't clean up
 	// so you can see them in the Azurite storage browser
 	testFiles := map[string]string{
-		"demo/certificate.pem":        "-----BEGIN CERTIFICATE-----\nMIIC...\n-----END CERTIFICATE-----",
-		"demo/private.key":           "-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----",
-		"demo/config/settings.json":  `{"domain": "example.com", "email": "admin@example.com"}`,
-		"demo/logs/access.log":       "2025-08-01 08:00:00 INFO Certificate renewed successfully",
+		"demo/certificate.pem":      "-----BEGIN CERTIFICATE-----\nMIIC...\n-----END CERTIFICATE-----",
+		"demo/private.key":          "-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----",
+		"demo/config/settings.json": `{"domain": "example.com", "email": "admin@example.com"}`,
+		"demo/logs/access.log":      "2025-08-01 08:00:00 INFO Certificate renewed successfully",
 	}
 
 	for key, content := range testFiles {

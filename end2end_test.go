@@ -48,14 +48,14 @@ func init() {
 
 const (
 	testContainer = "test-container"
-	)
+)
 
 // getTestConnectionString returns the connection string for tests
 // Connection string is optional - when omitted, will use Azure CLI/managed identity
-func getTestConnectionString() (string, error) {
+func getTestConnectionString() string {
 	connStr := os.Getenv("AZURE_STORAGE_CONNECTION_STRING")
 	// Connection string is optional - return empty string if not set
-	return connStr, nil
+	return connStr
 }
 
 // getTestAccountName returns the account name for tests
@@ -77,10 +77,7 @@ func TestAzureBlobStorage(t *testing.T) {
 	ctx := context.Background()
 
 	// Get connection details from environment variables
-	connectionString, err := getTestConnectionString()
-	if err != nil {
-		t.Skipf("Skipping test: %v", err)
-	}
+	connectionString := getTestConnectionString()
 
 	accountName, err := getTestAccountName()
 	if err != nil {

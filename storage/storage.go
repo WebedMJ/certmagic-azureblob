@@ -37,6 +37,7 @@ var (
 	_ certmagic.Locker  = (*Storage)(nil)
 )
 
+//nolint:govet // fieldalignment: struct field order optimized for readability over memory
 type Config struct {
 	// AccountName is the Azure Storage account name
 	AccountName string
@@ -48,6 +49,7 @@ type Config struct {
 	Credential azcore.TokenCredential
 }
 
+//nolint:nestif // Functionally correct and readable
 func NewStorage(ctx context.Context, config Config) (*Storage, error) {
 	var containerClient *container.Client
 	var err error
@@ -73,9 +75,9 @@ func NewStorage(ctx context.Context, config Config) (*Storage, error) {
 
 		// Use managed identity or other credential
 		accountURL := fmt.Sprintf("https://%s.blob.core.windows.net/", config.AccountName)
-		serviceClient, err := azblob.NewClient(accountURL, credential, nil)
-		if err != nil {
-			return nil, fmt.Errorf("could not initialize service client: %w", err)
+		serviceClient, clientErr := azblob.NewClient(accountURL, credential, nil)
+		if clientErr != nil {
+			return nil, fmt.Errorf("could not initialize service client: %w", clientErr)
 		}
 		containerClient = serviceClient.ServiceClient().NewContainerClient(config.ContainerName)
 	}
@@ -256,10 +258,9 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 		// Create an empty blob to lease
 		blockBlobClient := s.containerClient.NewBlockBlobClient(lockKey)
 		_, err := blockBlobClient.UploadBuffer(ctx, []byte(""), nil)
-		if err != nil {
-			// Another process might have created it, ignore the error and continue
-			// (Azure will return ConflictError if blob already exists)
-		}
+		// Ignore error if blob already exists (another process might have created it)
+		// Azure will return ConflictError if blob already exists
+		_ = err
 	}
 
 	// Create lease client
