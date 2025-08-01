@@ -38,4 +38,4 @@ jobs:
       run: go test -v ./...
       env:
         AZURE_STORAGE_CONNECTION_STRING: "${{ steps.azuright.outputs.connstring }}"
-        #AZURE_STORAGE_ACCOUNT: "devstoreaccount1"
+        AZURE_STORAGE_ACCOUNT: "devstoreaccount1"
