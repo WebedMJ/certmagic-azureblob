@@ -27,10 +27,16 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
           
+    - name: Setup Azurite
+      uses: potatoqualitee/azurite-action@v1.1.1
+      with:
+        version: 'latest'
+        
     - name: Download dependencies
       run: go mod download
       
     - name: Run tests
       run: go test -v ./...
       env:
-        SKIP_AZURITE_TESTS: true
+        AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+        AZURE_STORAGE_ACCOUNT: "devstoreaccount1"
