@@ -103,7 +103,7 @@ This module supports several Azure authentication methods:
    {
    storage azureblob {
        account_name YOUR_STORAGE_ACCOUNT
-       container_name certificates
+       container_name caddy-data
        connection_string "YOUR_STORAGE_CONNECTION_STRING"
    }
    }
@@ -115,7 +115,7 @@ This module supports several Azure authentication methods:
    {
    storage azureblob {
        account_name YOUR_STORAGE_ACCOUNT
-       container_name certificates
+       container_name caddy-data
        # No connection_string - uses managed identity automatically
    }
    }
@@ -153,7 +153,7 @@ This module supports several Azure authentication methods:
 
    config := certmagicazureblob.Config{
        AccountName:      "YOUR_STORAGE_ACCOUNT",
-       ContainerName:    "certificates",
+       ContainerName:    "caddy-data",
        ConnectionString: "YOUR_STORAGE_CONNECTION_STRING",
        // Or omit ConnectionString to use managed identity
    }
