@@ -1,6 +1,8 @@
 # Certmagic Storage Backend for Azure Blob Storage
 
-This library allows you to use Azure Blob Storage as key/certificate storage backend for your [Certmagic](https://github.com/caddyserver/certmagic)-enabled HTTPS server.
+A storage module to use Azure Blob Storage as key/certificate storage backend for your [Certmagic](https://github.com/caddyserver/certmagic)-enabled HTTPS server.
+
+⭐ Inspired by [grafana/certmagic-gcs](https://github.com/grafana/certmagic-gcs/).
 
 ## Usage
 
@@ -308,6 +310,10 @@ To skip tests in environments without Azure access:
 ```console
 SKIP_AZURITE_TESTS=true go test ./...
 ```
+
+## Acknowledgments
+
+This module was created by adapting the excellent [grafana/certmagic-gcs](https://github.com/grafana/certmagic-gcs/) Google Cloud Storage implementation for Azure Blob Storage. Their Google Cloud Storage implementation was an invaluable reference for understanding the CertMagic storage interface and building a robust storage backend. 🙏
 
 ## License
 
