@@ -28,7 +28,7 @@ jobs:
           ${{ runner.os }}-go-
           
     - name: Install Azurite
-      id: azuright
+      id: azurite
       uses: potatoqualitee/azuright@v1.1
         
     - name: Download dependencies
