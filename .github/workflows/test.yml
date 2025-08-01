@@ -27,8 +27,8 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
           
-    - name: Setup Azurite
-      uses: potatoqualitee/azurite-action@v1.1.1
+    - name: azuright
+      uses: potatoqualitee/azuright@v1.1
       with:
         version: 'latest'
         
