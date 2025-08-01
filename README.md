@@ -121,6 +121,8 @@ This module supports several Azure authentication methods:
    $ export AZURE_TENANT_ID="......"
    ```
 
+   The AZURE_CLIENT_ID variable is optional and can be used to supply the client id for a user assigned managed identity. If omitted it will use a system assigned identity by default.
+
 ### CertMagic
 
 1. **Add the package**
