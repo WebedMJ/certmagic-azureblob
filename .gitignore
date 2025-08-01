@@ -29,4 +29,11 @@ go.work.sum
 
 # Editor/IDE
 # .idea/
-# .vscode/
+.vscode/
+
+# Azurite
+__blobstorage__**
+__azurite*.json
+
+# Test Caddyfiles
+Caddyfile
