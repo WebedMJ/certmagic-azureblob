@@ -18,8 +18,8 @@ import (
 )
 
 var (
-	// LockExpiration is the duration before which a Lock is considered expired (Azure lease duration)
-	LockExpiration = 60 * time.Second
+	// LockExpiration in seconds is the duration before which a Lock is considered expired (Azure lease duration)
+	LockExpiration int32 = 60
 	// LockPollInterval is the interval between lease acquisition retries
 	LockPollInterval = 1 * time.Second
 )
@@ -134,9 +134,7 @@ func (s *Storage) Load(ctx context.Context, key string) ([]byte, error) {
 	return data, nil
 }
 
-// Delete deletes key. An error should be
-// returned only if the key still exists
-// when the method returns.
+// Delete deletes key. An error should be returned only if the key still exists when the method returns.
 func (s *Storage) Delete(ctx context.Context, key string) error {
 	blobClient := s.containerClient.NewBlobClient(key)
 
@@ -156,7 +154,6 @@ func (s *Storage) Delete(ctx context.Context, key string) error {
 }
 
 // Exists returns true if the key exists
-// and there was no error checking.
 func (s *Storage) Exists(ctx context.Context, key string) bool {
 	blobClient := s.containerClient.NewBlobClient(key)
 
@@ -164,11 +161,8 @@ func (s *Storage) Exists(ctx context.Context, key string) bool {
 	return err == nil
 }
 
-// List returns all keys that match prefix.
-// If recursive is true, non-terminal keys
-// will be enumerated (i.e. "directories"
-// should be walked); otherwise, only keys
-// prefixed exactly by prefix will be listed.
+// List returns all keys that match prefix. If recursive is true, non-terminal keys will be enumerated
+// otherwise, only keys prefixed exactly by prefix will be listed.
 func (s *Storage) List(ctx context.Context, prefix string, recursive bool) ([]string, error) {
 	var names []string
 
@@ -225,41 +219,20 @@ func (s *Storage) Stat(ctx context.Context, key string) (certmagic.KeyInfo, erro
 	return keyInfo, nil
 }
 
-// Lock acquires the lock for key, blocking until the lock
-// can be obtained or an error is returned. Note that, even
-// after acquiring a lock, an idempotent operation may have
-// already been performed by another process that acquired
-// the lock before - so always check to make sure idempotent
-// operations still need to be performed after acquiring the
-// lock.
-//
-// The actual implementation of obtaining of a lock must be
-// an atomic operation so that multiple Lock calls at the
-// same time always results in only one caller receiving the
-// lock at any given time.
-//
-// To prevent deadlocks, all implementations (where this concern
-// is relevant) should put a reasonable expiration on the lock in
-// case Unlock is unable to be called due to some sort of network
-// failure or system crash. Additionally, implementations should
-// honor context cancellation as much as possible (in case the
-// caller wishes to give up and free resources before the lock
-// can be obtained).
+// Lock acquires the lock for key, blocking until the lock can be obtained or an error is returned.
 func (s *Storage) Lock(ctx context.Context, key string) error {
 	lockKey := s.objLockName(key)
 
 	// Create blob client for the lock blob
 	blobClient := s.containerClient.NewBlobClient(lockKey)
 
-	// First, ensure the lock blob exists (can't lease a non-existent blob)
-	// Try to create an empty lock blob if it doesn't exist
+	// First, ensure the lock blob exists, try to create an empty lock blob if it doesn't exist
 	exists := s.Exists(ctx, lockKey)
 	if !exists {
 		// Create an empty blob to lease
 		blockBlobClient := s.containerClient.NewBlockBlobClient(lockKey)
 		_, err := blockBlobClient.UploadBuffer(ctx, []byte(""), nil)
-		// Ignore error if blob already exists (another process might have created it)
-		// Azure will return ConflictError if blob already exists
+		// Ignore error if blob already exists, Azure will return ConflictError if blob already exists
 		_ = err
 	}
 
@@ -271,8 +244,8 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 
 	// Try to acquire the lease with retries
 	for {
-		// Attempt to acquire a 60-second lease
-		_, err := leaseClient.AcquireLease(ctx, 60, nil)
+		// Attempt to acquire a lease
+		_, err := leaseClient.AcquireLease(ctx, LockExpiration, nil)
 		if err == nil {
 			// Successfully acquired the lease
 			s.activeLocks[key] = leaseClient
@@ -297,9 +270,6 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 }
 
 // Unlock releases the lock for key by releasing the Azure Blob lease.
-// This method must ONLY be called after a successful call to Lock,
-// and only after the critical section is finished, even if it errored
-// or timed out. Unlock cleans up any resources allocated during Lock.
 func (s *Storage) Unlock(ctx context.Context, key string) error {
 	// Get the lease client from active locks
 	leaseClient, exists := s.activeLocks[key]

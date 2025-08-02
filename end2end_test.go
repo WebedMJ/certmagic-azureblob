@@ -13,33 +13,6 @@ import (
 	"github.com/webedmj/certmagic-azureblob/storage"
 )
 
-// Test Configuration:
-//
-// REQUIRED environment variables:
-//   AZURE_STORAGE_CONNECTION_STRING - Azure Storage connection string
-//   AZURE_STORAGE_ACCOUNT - Azure Storage account name
-//
-// Environment variables can be provided via:
-//   1. .env file (automatically loaded) - recommended for local development
-//   2. Shell environment variables - required for CI/CD
-//   3. VS Code launch configurations - .vscode/launch.json
-//
-// For local development with Azurite (connection string required):
-//   Create .env file with:
-//   AZURE_STORAGE_CONNECTION_STRING="YOUR_AZURITE_CONNECTION_STRING"
-//   AZURE_STORAGE_ACCOUNT=YOUR_AZURITE_ACCOUNT
-//
-// For testing with real Azure Storage (connection string optional):
-//   Option 1 - Connection String:
-//     AZURE_STORAGE_CONNECTION_STRING=YOUR_STORAGE_CONNECTION_STRING
-//     AZURE_STORAGE_ACCOUNT=YOUR_STORAGE_ACCOUNT
-//   Option 2 - Azure CLI (after `az login`):
-//     AZURE_STORAGE_ACCOUNT=YOUR_STORAGE_ACCOUNT
-//     # No connection string needed!
-//
-// To skip tests (e.g., in CI):
-//   SKIP_AZURITE_TESTS=true
-
 func init() {
 	// Try to load .env file, but don't fail if it doesn't exist
 	// This allows tests to work with either .env files or environment variables
@@ -51,7 +24,6 @@ const (
 )
 
 // getTestConnectionString returns the connection string for tests
-// Connection string is optional - when omitted, will use Azure CLI/managed identity
 func getTestConnectionString() string {
 	connStr := os.Getenv("AZURE_STORAGE_CONNECTION_STRING")
 	// Connection string is optional - return empty string if not set
@@ -69,7 +41,7 @@ func getTestAccountName() (string, error) {
 }
 
 func TestAzureBlobStorage(t *testing.T) {
-	// Check if we should skip tests (useful for CI environments without Azurite)
+	// Check if we should skip Azurite tests, this currently all tests but could be useful in the future
 	if os.Getenv("SKIP_AZURITE_TESTS") == "true" {
 		t.Skip("Azurite tests disabled via SKIP_AZURITE_TESTS environment variable")
 	}
@@ -91,9 +63,7 @@ func TestAzureBlobStorage(t *testing.T) {
 		ContainerName:    testContainer,
 		ConnectionString: connectionString,
 	})
-	if err != nil {
-		t.Skipf("Azure storage not available: %v. Check your credentials and ensure storage is accessible", err)
-	}
+	require.NoError(t, err, "Azure storage must be available for end-to-end integration test. Check your credentials and ensure storage is accessible")
 
 	// Test basic storage operations to verify integration
 	testKey := "end2end-test/certificate.pem"
@@ -109,8 +79,7 @@ func TestAzureBlobStorage(t *testing.T) {
 	assert.Equal(t, testData, loaded)
 
 	// Test CertMagic integration
-	// Note: Full ACME integration would require a test ACME server like Pebble
-	// For now, we just verify that CertMagic can use our storage backend
+	// Verify that CertMagic can use our storage backend
 	certmagic.Default.Storage = storageBackend
 
 	// Verify CertMagic can use the storage
