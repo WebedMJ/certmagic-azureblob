@@ -2,7 +2,7 @@
 
 A storage module to use Azure Blob Storage as key/certificate storage backend for your [Certmagic](https://github.com/caddyserver/certmagic)-enabled HTTPS server.
 
-⭐ Inspired by [grafana/certmagic-gcs](https://github.com/grafana/certmagic-gcs/).
+Inspired by [grafana/certmagic-gcs](https://github.com/grafana/certmagic-gcs/).
 
 ## Usage
 
@@ -28,6 +28,7 @@ In this section, we create a Caddy config using our Azure Blob Storage backend.
 
    - Create an Azure Storage Account
    - Create a blob container (e.g., `caddy-data`)
+     - The module will create the container if it doesn't exist and has enough permissions
    - Get your connection string or configure authentication
 
 2. **Create a `Caddyfile`**
@@ -103,11 +104,11 @@ This module supports several Azure authentication methods:
 
    ```caddy
    {
-   storage azureblob {
-       account_name YOUR_STORAGE_ACCOUNT
-       container_name caddy-data
-       connection_string "YOUR_STORAGE_CONNECTION_STRING"
-   }
+      storage azureblob {
+         account_name YOUR_STORAGE_ACCOUNT
+         container_name caddy-data
+         connection_string "YOUR_STORAGE_CONNECTION_STRING"
+      }
    }
    ```
 
@@ -115,11 +116,10 @@ This module supports several Azure authentication methods:
 
    ```caddy
    {
-   storage azureblob {
-       account_name YOUR_STORAGE_ACCOUNT
-       container_name caddy-data
-       # No connection_string - uses managed identity automatically
-   }
+      storage azureblob {
+         account_name YOUR_STORAGE_ACCOUNT
+         container_name caddy-data
+      }
    }
    ```
 
@@ -127,50 +127,14 @@ This module supports several Azure authentication methods:
 
    Set these environment variables and omit `connection_string`:
 
-   ```console
+   ```sh
    $ export AZURE_STORAGE_ACCOUNT="myaccount"
    $ export AZURE_STORAGE_KEY="......"
    # Or for managed identity:
-   $ export AZURE_CLIENT_ID="......"
-   $ export AZURE_TENANT_ID="......"
+   $ export AZURE_CLIENT_ID="......" # Optional: for user assigned identity
    ```
 
    The AZURE_CLIENT_ID variable is optional and can be used to supply the client id for a user assigned managed identity. If omitted it will use a system assigned identity by default.
-
-### CertMagic
-
-1. **Add the package**
-
-   ```console
-   go get github.com/webedmj/certmagic-azureblob
-   ```
-
-2. **Create a `storage.NewStorage` with a `storage.Config`**
-
-   ```golang
-   import (
-       "context"
-       certmagicazureblob "github.com/webedmj/certmagic-azureblob/storage"
-   )
-
-   config := certmagicazureblob.Config{
-       AccountName:      "YOUR_STORAGE_ACCOUNT",
-       ContainerName:    "caddy-data",
-       ConnectionString: "YOUR_STORAGE_CONNECTION_STRING",
-       // Or omit ConnectionString to use managed identity
-   }
-
-   azureStorage, err := certmagicazureblob.NewStorage(context.Background(), config)
-   if err != nil {
-       log.Fatal(err)
-   }
-   ```
-
-3. **Optionally, [register as default storage](https://github.com/caddyserver/certmagic#storage)**
-
-   ```golang
-   certmagic.Default.Storage = azureStorage
-   ```
 
 ## Configuration Options
 
@@ -183,31 +147,21 @@ This module supports several Azure authentication methods:
 \*When `connection_string` is omitted, the module will attempt to use:
 
 1. Azure Managed Identity (if running on Azure)
-2. Environment variables (`AZURE_STORAGE_ACCOUNT`, `AZURE_STORAGE_KEY`)
+2. Environment variables (`AZURE_STORAGE_ACCOUNT`, `AZURE_STORAGE_CONNECTION_STRING`)
 3. Azure CLI credentials
 4. Default Azure credential chain
 
-## Testing
+## Running Tests
 
 The tests support multiple authentication methods, mirroring the behavior of the real module:
 
 ### Local Development with Azurite (Recommended)
 
-**⚠️ Important**: Azurite requires a connection string - it doesn't support Azure CLI or managed identity authentication.
-
-1. **Start Azurite** (Azure Storage Emulator):
-
-   ```console
-   # Using Docker
-   docker run -d -p 10000:10000 mcr.microsoft.com/azure-storage/azurite
-
-   # Or using VS Code extension: "Azurite" by Microsoft
-   # Or using npm: npm install -g azurite && azurite
-   ```
+1. **Install and start Azurite** (Azure Storage Emulator)
 
 2. **Configure connection string**:
 
-   ```console
+   ```sh
    cp .env.example .env
    # Edit .env and uncomment the AZURE_STORAGE_CONNECTION_STRING line
    # Use the default Azurite connection string provided in the file
@@ -215,19 +169,17 @@ The tests support multiple authentication methods, mirroring the behavior of the
 
 3. **Run tests**:
 
-   ```console
+   ```sh
    go test ./...
    ```
 
 ### Testing with Real Azure Storage
 
-**✅ Flexible Authentication**: Real Azure storage supports both connection strings and Azure CLI/managed identity.
-
 #### Option 1: Using Connection String
 
 1. **Create `.env` file**:
 
-   ```console
+   ```sh
    cp .env.example .env
    ```
 
@@ -240,7 +192,7 @@ The tests support multiple authentication methods, mirroring the behavior of the
 
 3. **Run tests**:
 
-   ```console
+   ```sh
    go test ./...
    ```
 
@@ -248,20 +200,20 @@ The tests support multiple authentication methods, mirroring the behavior of the
 
 1. **Login to Azure CLI**:
 
-   ```console
+   ```sh
    az login
    ```
 
 2. **Set only the account name**:
 
-   ```console
+   ```sh
    echo "AZURE_STORAGE_ACCOUNT=your-account-name" > .env
    # Note: No AZURE_STORAGE_CONNECTION_STRING needed!
    ```
 
 3. **Run tests**:
 
-   ```console
+   ```sh
    go test ./...
    ```
 
@@ -271,12 +223,14 @@ The tests support multiple authentication methods, mirroring the behavior of the
 
 **With Connection String**:
 
-```console
+```pwsh
 # Windows (PowerShell)
-$env:AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=..."
-$env:AZURE_STORAGE_ACCOUNT="your-account-name"
+$env:AZURE_STORAGE_CONNECTION_STRING = "DefaultEndpointsProtocol=https;AccountName=..."
+$env:AZURE_STORAGE_ACCOUNT = "your-account-name"
 go test ./...
+```
 
+```sh
 # Linux/macOS
 export AZURE_STORAGE_CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=..."
 export AZURE_STORAGE_ACCOUNT="your-account-name"
@@ -285,30 +239,16 @@ go test ./...
 
 **With Azure CLI** (after `az login`):
 
-```console
+```pwsh
 # Windows (PowerShell)
-$env:AZURE_STORAGE_ACCOUNT="your-account-name"
-go test ./...
-
-# Linux/macOS
-export AZURE_STORAGE_ACCOUNT="your-account-name"
+$env:AZURE_STORAGE_ACCOUNT = "your-account-name"
 go test ./...
 ```
 
-### VS Code Testing
-
-Use the provided debug configurations in `.vscode/launch.json`:
-
-- **Debug Tests**: Local testing with Azurite
-- **Debug Tests (Real Azure)**: Uses your environment variables
-- **Debug Tests (Skip Azurite)**: Skips Azure-dependent tests
-
-### CI/CD
-
-To skip tests in environments without Azure access:
-
-```console
-SKIP_AZURITE_TESTS=true go test ./...
+```sh
+# Linux/macOS
+export AZURE_STORAGE_ACCOUNT="your-account-name"
+go test ./...
 ```
 
 ## Acknowledgments
