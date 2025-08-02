@@ -16,7 +16,8 @@ Closes #456
 
 - [ ] Non-module change (e.g. CI/CD, documentation, etc.)
 - [ ] Someone has opened a bug report issue, and I have included "Closes #{bug_report_issue_number}" in the PR description.
-- [ ] Feature update backwards compatible feature updates.
+- [ ] Feature update.
+- [ ] Bug fix.
 - [ ] Breaking changes.
 
 # Checklist
