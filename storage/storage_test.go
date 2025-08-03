@@ -25,9 +25,9 @@ const (
 func setupTestStorage(t *testing.T) *Storage {
 	ctx := context.Background()
 
-	// Check if we should skip tests (useful for CI environments without Azurite)
+	// Check if we should skip Azurite tests, this currently all tests but could be useful in the future
 	if os.Getenv("SKIP_AZURITE_TESTS") == "true" {
-		t.Skip("Azurite tests disabled via SKIP_AZURITE_TESTS environment variable")
+		t.Skip("Azurite tests disabled via SKIP_AZURITE_TESTS")
 	}
 
 	// Get connection string from environment (optional)
@@ -35,9 +35,7 @@ func setupTestStorage(t *testing.T) *Storage {
 
 	// Get account name from environment (required)
 	accountName := os.Getenv("AZURE_STORAGE_ACCOUNT")
-	if accountName == "" {
-		t.Skip("AZURE_STORAGE_ACCOUNT environment variable is required for tests. Set it in your shell or create a .env file (see .env.example).")
-	}
+	require.NotEmpty(t, accountName, "AZURE_STORAGE_ACCOUNT is required")
 
 	config := Config{
 		AccountName:      accountName,
@@ -47,9 +45,7 @@ func setupTestStorage(t *testing.T) *Storage {
 	}
 
 	s, err := NewStorage(ctx, config)
-	if err != nil {
-		t.Skipf("Azure storage not available: %v. Make sure your credentials are valid and storage is accessible", err)
-	}
+	require.NoError(t, err, "Azure storage or Azurite must be available")
 
 	return s
 }
@@ -308,4 +304,104 @@ func TestCreatePersistentFiles(t *testing.T) {
 	}
 
 	t.Log("Test files created, verified, and cleaned up successfully")
+}
+
+func TestListRecursiveBehavior(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+
+	prefix := "recursive-test/"
+	testKeys := []string{
+		prefix + "file1.txt",                // Should appear in both recursive and non-recursive
+		prefix + "file2.txt",                // Should appear in both recursive and non-recursive
+		prefix + "dir/file3.txt",            // Should only appear in recursive
+		prefix + "dir/subdir/file4.txt",     // Should only appear in recursive
+		prefix + "another/nested/file5.txt", // Should only appear in recursive
+	}
+
+	// Store test files
+	for i, key := range testKeys {
+		content := []byte(fmt.Sprintf("test content for recursive test %d", i))
+		t.Logf("Storing key: %s", key)
+		err := s.Store(ctx, key, content)
+		require.NoError(t, err, "Failed to store key: %s", key)
+
+		// Verify each key was stored
+		exists := s.Exists(ctx, key)
+		assert.True(t, exists, "Key should exist after storing: %s", key)
+	}
+
+	// Test recursive=true (should find all files)
+	recursiveKeys, err := s.List(ctx, prefix, true)
+	require.NoError(t, err, "Recursive listing should not fail")
+	t.Logf("Recursive listing found %d keys: %v", len(recursiveKeys), recursiveKeys)
+
+	// Verify all test keys are found in recursive listing
+	recursiveKeyMap := make(map[string]bool)
+	for _, key := range recursiveKeys {
+		recursiveKeyMap[key] = true
+	}
+
+	for _, testKey := range testKeys {
+		assert.True(t, recursiveKeyMap[testKey], "Expected key %s to be in recursive listing", testKey)
+	}
+
+	// Test recursive=false (should only find files directly under prefix, not in subdirectories)
+	nonRecursiveKeys, err := s.List(ctx, prefix, false)
+	require.NoError(t, err, "Non-recursive listing should not fail")
+	t.Logf("Non-recursive listing found %d keys: %v", len(nonRecursiveKeys), nonRecursiveKeys)
+
+	// Expected keys for non-recursive listing (only files directly under prefix)
+	expectedNonRecursiveKeys := []string{
+		prefix + "file1.txt",
+		prefix + "file2.txt",
+	}
+
+	// Keys that should NOT be in non-recursive listing (files in subdirectories)
+	unexpectedNonRecursiveKeys := []string{
+		prefix + "dir/file3.txt",
+		prefix + "dir/subdir/file4.txt",
+		prefix + "another/nested/file5.txt",
+	}
+
+	nonRecursiveKeyMap := make(map[string]bool)
+	for _, key := range nonRecursiveKeys {
+		nonRecursiveKeyMap[key] = true
+	}
+
+	// Verify expected keys are present in non-recursive listing
+	for _, expectedKey := range expectedNonRecursiveKeys {
+		assert.True(t, nonRecursiveKeyMap[expectedKey], "Expected key %s to be in non-recursive listing", expectedKey)
+	}
+
+	// Verify unexpected keys are NOT present in non-recursive listing
+	for _, unexpectedKey := range unexpectedNonRecursiveKeys {
+		assert.False(t, nonRecursiveKeyMap[unexpectedKey], "Key %s should NOT be in non-recursive listing", unexpectedKey)
+	}
+
+	// Verify that non-recursive returns fewer or equal items than recursive
+	assert.LessOrEqual(t, len(nonRecursiveKeys), len(recursiveKeys), "Non-recursive listing should return fewer or equal items than recursive")
+
+	// Test edge case: empty prefix
+	allKeys, err := s.List(ctx, "", true)
+	require.NoError(t, err, "Listing with empty prefix should not fail")
+	t.Logf("Found %d total keys with empty prefix", len(allKeys))
+
+	// All our test keys should be in the complete listing
+	allKeyMap := make(map[string]bool)
+	for _, key := range allKeys {
+		allKeyMap[key] = true
+	}
+
+	for _, testKey := range testKeys {
+		assert.True(t, allKeyMap[testKey], "Expected key %s to be in complete listing", testKey)
+	}
+
+	// Clean up all test files
+	for _, key := range testKeys {
+		err := s.Delete(ctx, key)
+		require.NoError(t, err, "Failed to delete key: %s", key)
+	}
+
+	t.Log("Recursive behavior test completed successfully")
 }

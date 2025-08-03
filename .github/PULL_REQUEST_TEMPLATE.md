@@ -14,13 +14,13 @@ Closes #456
 
 <!-- Use the check-boxes [x] on the options that are relevant. -->
 
-- [] Non-module change (e.g. CI/CD, documentation, etc.)
-- [] Someone has opened a bug report issue, and I have included "Closes #{bug_report_issue_number}" in the PR description.
-- [] Feature update.
-- [] Bug fix.
-- [] Breaking changes.
+- [ ] Non-module change (e.g. CI/CD, documentation, etc.)
+- [ ] Someone has opened a bug report issue, and I have included "Closes #{bug_report_issue_number}" in the PR description.
+- [ ] Feature update.
+- [ ] Bug fix.
+- [ ] Breaking changes.
 
 # Checklist
 
-- [] I'm sure there are no other open Pull Requests for the same update/change
-- [] My corresponding pipelines / checks run clean and green without any errors or warnings
+- [ ] I'm sure there are no other open Pull Requests for the same update/change
+- [ ] My corresponding pipelines / checks run clean and green without any errors or warnings

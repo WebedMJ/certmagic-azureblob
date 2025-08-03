@@ -68,7 +68,7 @@ func (s *CaddyStorageAzureBlob) Validate() error {
 	return nil
 }
 
-// UnmarshalCaddyfile unmarshall caddy file.
+// Unmarshall caddy file.
 func (s *CaddyStorageAzureBlob) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		key := d.Val()
