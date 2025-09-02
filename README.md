@@ -125,11 +125,11 @@ This module supports several Azure authentication methods:
 
 3. **Environment Variables**
 
-   Set these environment variables and omit `connection_string`:
+   Set these environment variables:
 
    ```sh
    $ export AZURE_STORAGE_ACCOUNT="myaccount"
-   $ export AZURE_STORAGE_KEY="......"
+   $ export AZURE_STORAGE_CONNECTION_STRING="......"
    # Or for managed identity:
    $ export AZURE_CLIENT_ID="......" # Optional: for user assigned identity
    ```
