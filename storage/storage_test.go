@@ -411,7 +411,7 @@ func TestStatNonExistentKey(t *testing.T) {
 	s := setupTestStorage(t)
 	ctx := context.Background()
 	_, err := s.Stat(ctx, "definitely-not-a-real-key.txt")
-	assert.ErrorIs(t, err, os.ErrNotExist, "Stat on non-existent key should return fs.ErrNotExist")
+	assert.ErrorIs(t, err, os.ErrNotExist, "Stat on non-existent key should return os.ErrNotExist")
 }
 
 // Test storing and loading a very large blob (>10MB)
