@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/caddyserver/certmagic"
 	"github.com/joho/godotenv"
@@ -24,6 +25,7 @@ const (
 )
 
 // getTestConnectionString returns the connection string for tests
+
 func getTestConnectionString() string {
 	connStr := os.Getenv("AZURE_STORAGE_CONNECTION_STRING")
 	// Connection string is optional - return empty string if not set
@@ -95,4 +97,71 @@ func TestAzureBlobStorage(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Log("Azure Blob Storage integration with CertMagic successful")
+}
+
+// Test CertMagic integration for lock/unlock and distributed workflows
+func TestCertMagicDistributedLocking(t *testing.T) {
+	if os.Getenv("SKIP_AZURITE_TESTS") == "true" {
+		t.Skip("Azurite tests disabled via SKIP_AZURITE_TESTS environment variable")
+	}
+
+	ctx := context.Background()
+	connectionString := getTestConnectionString()
+	accountName, err := getTestAccountName()
+	if err != nil {
+		t.Skipf("Skipping test: %v", err)
+	}
+
+	storageBackend, err := storage.NewStorage(ctx, storage.Config{
+		AccountName:      accountName,
+		ContainerName:    testContainer,
+		ConnectionString: connectionString,
+	})
+	require.NoError(t, err, "Azure storage must be available for distributed lock test")
+
+	certmagic.Default.Storage = storageBackend
+
+	lockKey := "distributed-lock-test"
+
+	// Acquire lock in one goroutine
+	locked := make(chan struct{})
+	released := make(chan struct{})
+
+	go func() {
+		err := certmagic.Default.Storage.(certmagic.Locker).Lock(ctx, lockKey)
+		require.NoError(t, err, "First lock should succeed")
+		locked <- struct{}{}
+		<-released
+		err = certmagic.Default.Storage.(certmagic.Locker).Unlock(ctx, lockKey)
+		require.NoError(t, err, "Unlock should succeed")
+	}()
+
+	<-locked
+
+	// Try to acquire the same lock in another goroutine (should block until released)
+	acquired := make(chan struct{})
+	go func() {
+		err := certmagic.Default.Storage.(certmagic.Locker).Lock(ctx, lockKey)
+		require.NoError(t, err, "Second lock should succeed after first is released")
+		acquired <- struct{}{}
+		_ = certmagic.Default.Storage.(certmagic.Locker).Unlock(ctx, lockKey)
+	}()
+
+	// Wait a moment to ensure the second goroutine is blocked
+	time.Sleep(2 * time.Second)
+
+	// Release the first lock
+	released <- struct{}{}
+
+	// Wait for the second lock to be acquired
+	select {
+	case <-acquired:
+		// Success
+	case <-time.After(10 * time.Second):
+		t.Fatal("Second lock was not acquired in time")
+	}
+
+	// Clean up lock blob
+	_ = storageBackend.Delete(ctx, lockKey+".lock")
+	t.Log("CertMagic distributed lock/unlock integration successful")
 }

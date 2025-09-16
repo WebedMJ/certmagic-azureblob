@@ -405,3 +405,153 @@ func TestListRecursiveBehavior(t *testing.T) {
 
 	t.Log("Recursive behavior test completed successfully")
 }
+
+// Test Stat on a non-existent key (should return fs.ErrNotExist)
+func TestStatNonExistentKey(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	_, err := s.Stat(ctx, "definitely-not-a-real-key.txt")
+	assert.ErrorIs(t, err, os.ErrNotExist, "Stat on non-existent key should return fs.ErrNotExist")
+}
+
+// Test storing and loading a very large blob (>10MB)
+func TestLargeBlobStoreLoad(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	largeKey := "large-blob-test/largefile.bin"
+	largeContent := make([]byte, 12*1024*1024) // 12MB
+	for i := range largeContent {
+		largeContent[i] = byte(i % 256)
+	}
+	err := s.Store(ctx, largeKey, largeContent)
+	require.NoError(t, err, "Should be able to store large blob")
+	loadedLarge, err := s.Load(ctx, largeKey)
+	require.NoError(t, err, "Should be able to load large blob")
+	assert.Equal(t, largeContent, loadedLarge, "Loaded large blob should match stored content")
+	_ = s.Delete(ctx, largeKey)
+}
+
+// Test storing and loading keys with special characters (Unicode, spaces, etc.)
+func TestSpecialCharacterKeys(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	specialKeys := []string{
+		"special chars/üñîçødë.txt",
+		"special chars/with space.txt",
+		"special chars/!@#$%^&().txt",
+		"special chars/中文文件.txt",
+	}
+	for i, key := range specialKeys {
+		content := []byte(fmt.Sprintf("special content %d", i))
+		err := s.Store(ctx, key, content)
+		require.NoError(t, err, "Failed to store special key: %s", key)
+		loaded, err := s.Load(ctx, key)
+		require.NoError(t, err, "Failed to load special key: %s", key)
+		assert.Equal(t, content, loaded, "Loaded content mismatch for key: %s", key)
+		_ = s.Delete(ctx, key)
+	}
+}
+
+// Test Store overwriting an existing blob (ensure new content is present)
+func TestBlobOverwrite(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "overwrite-test/file.txt"
+	content1 := []byte("first content")
+	content2 := []byte("second content")
+	err := s.Store(ctx, key, content1)
+	require.NoError(t, err)
+	err = s.Store(ctx, key, content2)
+	require.NoError(t, err)
+	loaded, err := s.Load(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, content2, loaded, "Loaded content should match overwritten content")
+	_ = s.Delete(ctx, key)
+}
+
+// Test concurrent Store/Load/Delete/List operations from multiple goroutines
+func TestConcurrentOperations(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	keyPrefix := "concurrent-test/"
+	numGoroutines := 10
+	numOps := 20
+	done := make(chan struct{})
+
+	// Store concurrently
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			for j := 0; j < numOps; j++ {
+				key := fmt.Sprintf("%sfile-%d-%d.txt", keyPrefix, id, j)
+				content := []byte(fmt.Sprintf("content-%d-%d", id, j))
+				err := s.Store(ctx, key, content)
+				if err != nil {
+					t.Errorf("Store failed: %v", err)
+				}
+				loaded, err := s.Load(ctx, key)
+				if err != nil {
+					t.Errorf("Load failed: %v", err)
+				}
+				if string(loaded) != string(content) {
+					t.Errorf("Loaded content mismatch for %s", key)
+				}
+				_ = s.Delete(ctx, key)
+			}
+			done <- struct{}{}
+		}(i)
+	}
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+
+	// List should be empty after deletes
+	keys, err := s.List(ctx, keyPrefix, true)
+	require.NoError(t, err)
+	assert.Empty(t, keys, "All keys should be deleted after concurrent ops")
+}
+
+// Test lock lease expiration (acquire lock, wait for lease to expire, then try to acquire again)
+func TestLockLeaseExpiration(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "lease-expiration-test"
+
+	// Acquire lock
+	err := s.Lock(ctx, key)
+	require.NoError(t, err)
+
+	// Wait for lease to expire (LockExpiration + 2 seconds)
+	wait := time.Duration(LockExpiration+2) * time.Second
+	t.Logf("Waiting %v for lease to expire...", wait)
+	time.Sleep(wait)
+
+	// Try to acquire lock again (should succeed after lease expiration)
+	err = s.Lock(ctx, key)
+	require.NoError(t, err, "Should be able to acquire lock after lease expires")
+
+	_ = s.Unlock(ctx, key)
+	_ = s.Delete(ctx, key+".lock")
+}
+
+// Test List with a prefix that matches no blobs (should return empty slice)
+func TestListNoMatches(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	keys, err := s.List(ctx, "no-such-prefix/", true)
+	require.NoError(t, err)
+	assert.Empty(t, keys, "List with no matching prefix should return empty slice")
+}
+
+// Test Delete on a key with special characters
+func TestDeleteSpecialCharacterKey(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "delete-special/üñîçødë file.txt"
+	content := []byte("to be deleted")
+	err := s.Store(ctx, key, content)
+	require.NoError(t, err)
+	err = s.Delete(ctx, key)
+	require.NoError(t, err)
+	exists := s.Exists(ctx, key)
+	assert.False(t, exists, "Key with special characters should be deleted")
+}
