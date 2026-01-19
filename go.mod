@@ -5,7 +5,7 @@ go 1.25
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1
-	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.3
+	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.4
 	github.com/caddyserver/caddy/v2 v2.10.2
 	github.com/caddyserver/certmagic v0.25.1
 	github.com/joho/godotenv v1.5.1
