@@ -19,7 +19,10 @@ import (
 
 var (
 	// LockExpiration in seconds is the duration before which a Lock is considered expired (Azure lease duration)
-	LockExpiration int32 = 60
+	// Make this 5 minutes as certmagic request processes can take a few minutes but will release early if done
+	// Expiring too soon may lead to multiple clients thinking they have the lock and requesting certificates simultaneously
+	// TODO: Implement LockLeaseRenewer to renew leases for long operations and reduce expiration
+	LockExpiration int32 = 240
 	// LockPollInterval is the interval between lease acquisition retries
 	LockPollInterval = 1 * time.Second
 )
