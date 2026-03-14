@@ -181,8 +181,9 @@ func (s *Storage) Exists(ctx context.Context, key string) bool {
 func (s *Storage) List(ctx context.Context, prefix string, recursive bool) ([]string, error) {
 	var names []string
 
-	// For now, use a simple approach with NewListBlobsFlatPager
-	pager := s.containerClient.NewListBlobsFlatPager(nil)
+	pager := s.containerClient.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{
+		Prefix: &prefix,
+	})
 
 	for pager.More() {
 		resp, err := pager.NextPage(ctx)
@@ -193,11 +194,6 @@ func (s *Storage) List(ctx context.Context, prefix string, recursive bool) ([]st
 		for _, blob := range resp.Segment.BlobItems {
 			if blob.Name != nil {
 				blobName := *blob.Name
-
-				// Filter by prefix
-				if !strings.HasPrefix(blobName, prefix) {
-					continue
-				}
 
 				// For non-recursive listing, filter out deeper nested paths
 				if !recursive && strings.Contains(blobName[len(prefix):], "/") {
@@ -241,14 +237,15 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 	// Create blob client for the lock blob
 	blobClient := s.containerClient.NewBlobClient(lockKey)
 
-	// First, ensure the lock blob exists, try to create an empty lock blob if it doesn't exist
-	exists := s.Exists(ctx, lockKey)
-	if !exists {
-		// Create an empty blob to lease
-		blockBlobClient := s.containerClient.NewBlockBlobClient(lockKey)
-		_, err := blockBlobClient.UploadBuffer(ctx, []byte(""), nil)
-		// Ignore error if blob already exists, Azure will return ConflictError if blob already exists
-		_ = err
+	// Ensure the lock blob exists. Always attempt creation; ignore conflict (already exists).
+	blockBlobClient := s.containerClient.NewBlockBlobClient(lockKey)
+	_, uploadErr := blockBlobClient.UploadBuffer(ctx, []byte(""), nil)
+	if uploadErr != nil {
+		var respErr *azcore.ResponseError
+		if !errors.As(uploadErr, &respErr) || respErr.StatusCode != 409 {
+			return fmt.Errorf("ensuring lock blob exists %s: %w", lockKey, uploadErr)
+		}
+		// 409 Conflict means the blob already exists — that is fine.
 	}
 
 	// Create lease client

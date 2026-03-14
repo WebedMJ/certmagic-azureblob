@@ -375,43 +375,6 @@ func TestLoadNonExistentKey(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist, "Load on non-existent key should return os.ErrNotExist")
 }
 
-func TestCreatePersistentFiles(t *testing.T) {
-	s := setupTestStorage(t)
-	ctx := context.Background()
-
-	// Create some test files that we won't clean up
-	// so you can see them in the Azurite storage browser
-	testFiles := map[string]string{
-		"demo/certificate.pem":      "-----BEGIN CERTIFICATE-----\nMIIC...\n-----END CERTIFICATE-----",
-		"demo/private.key":          "-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----",
-		"demo/config/settings.json": `{"domain": "example.com", "email": "admin@example.com"}`,
-		"demo/logs/access.log":      "2025-08-01 08:00:00 INFO Certificate renewed successfully",
-	}
-
-	for key, content := range testFiles {
-		t.Logf("Creating test file: %s", key)
-		err := s.Store(ctx, key, []byte(content))
-		require.NoError(t, err, "Failed to store %s", key)
-
-		// Verify it exists
-		exists := s.Exists(ctx, key)
-		assert.True(t, exists, "File should exist: %s", key)
-	}
-
-	// List all demo files
-	keys, err := s.List(ctx, "demo/", true) // recursive listing
-	require.NoError(t, err)
-	t.Logf("Created %d demo files: %v", len(keys), keys)
-
-	// Clean up test files
-	for key := range testFiles {
-		err := s.Delete(ctx, key)
-		require.NoError(t, err, "Failed to delete %s", key)
-	}
-
-	t.Log("Test files created, verified, and cleaned up successfully")
-}
-
 func TestListRecursiveBehavior(t *testing.T) {
 	s := setupTestStorage(t)
 	ctx := context.Background()
