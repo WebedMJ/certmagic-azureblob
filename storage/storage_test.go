@@ -198,6 +198,140 @@ func TestLockingOperations(t *testing.T) {
 	_ = s.Delete(ctx, lockKey)
 }
 
+func TestRenewLockLeaseActiveLeaseSucceeds(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "renew-active-lock-test"
+
+	err := s.Lock(ctx, key)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = s.Unlock(context.Background(), key)
+		_ = s.Delete(context.Background(), key+".lock")
+	})
+
+	err = s.RenewLockLease(ctx, key, 30*time.Second)
+	require.NoError(t, err, "RenewLockLease should succeed for an active lease")
+}
+
+func TestRenewLockLeaseWithoutActiveLockFails(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "renew-without-active-lock-test"
+
+	err := s.RenewLockLease(ctx, key, 30*time.Second)
+	require.Error(t, err, "RenewLockLease should fail when no active lease is tracked")
+}
+
+func TestRenewLockLeaseAfterUnlockFails(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "renew-after-unlock-test"
+
+	err := s.Lock(ctx, key)
+	require.NoError(t, err)
+
+	err = s.Unlock(ctx, key)
+	require.NoError(t, err)
+
+	err = s.RenewLockLease(ctx, key, 30*time.Second)
+	require.Error(t, err, "RenewLockLease should fail after lock is released")
+
+	_ = s.Delete(ctx, key+".lock")
+}
+
+// TestRenewLockLeaseAfterLeaseExpiry covers the Azure Blob Lease "Expired" state row in
+// the REST remarks table: Renew(A) on an expired-but-unmodified blob succeeds and
+// transitions the blob back to Leased(A).  This is distinct from the Released state
+// (TestRenewLockLeaseAfterUnlockFails) where our local guard prevents the call entirely.
+//
+// The test also verifies the lease extension is real — not just a nil error — by
+// asserting that an independent contender is blocked after the renewal.
+func TestRenewLockLeaseAfterLeaseExpiry(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "renew-after-expiry-test"
+
+	originalLockExpiration := LockExpiration
+	LockExpiration = 15 // minimum Azure fixed-lease duration, so expiry occurs quickly
+	t.Cleanup(func() {
+		LockExpiration = originalLockExpiration
+		_ = s.Unlock(context.Background(), key)
+		_ = s.Delete(context.Background(), key+".lock")
+	})
+
+	err := s.Lock(ctx, key)
+	require.NoError(t, err)
+
+	// Let the lease expire naturally — the blob is now in Azure's "Expired" state.
+	// Our in-memory activeLocks entry is still present (no Unlock was called),
+	// so RenewLockLease will pass the local guard and reach Azure.
+	time.Sleep(16 * time.Second)
+
+	// Azure permits Renew(A) from the Expired state when the blob has not been
+	// modified since expiry.  The blob is written only once during Lock and is not
+	// touched here, so the renewal must succeed and transition the blob to Leased(A).
+	err = s.RenewLockLease(ctx, key, 30*time.Second)
+	require.NoError(t, err, "RenewLockLease should succeed for an expired but unmodified blob lease")
+
+	// Prove the lease is truly active again: an independent contender must be blocked.
+	// A short timeout ensures we don't wait longer than necessary for the assertion.
+	contender := setupTestStorage(t)
+	shortCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	err = contender.Lock(shortCtx, key)
+	require.ErrorIs(t, err, context.DeadlineExceeded,
+		"Contender should be blocked by the renewed lease — Azure blob must be in Leased(A) state")
+}
+
+func TestRenewLockLeaseContextCancellation(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "renew-context-cancel-test"
+
+	err := s.Lock(ctx, key)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = s.Unlock(context.Background(), key)
+		_ = s.Delete(context.Background(), key+".lock")
+	})
+
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	err = s.RenewLockLease(cancelledCtx, key, 30*time.Second)
+	require.Error(t, err, "RenewLockLease should honor context cancellation")
+}
+
+func TestRenewLockLeaseKeepsContentionBlockedPastOriginalWindow(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "renew-blocking-window-test"
+
+	originalLockExpiration := LockExpiration
+	LockExpiration = 15
+	t.Cleanup(func() {
+		LockExpiration = originalLockExpiration
+		_ = s.Unlock(context.Background(), key)
+		_ = s.Delete(context.Background(), key+".lock")
+	})
+
+	err := s.Lock(ctx, key)
+	require.NoError(t, err)
+
+	// Renew shortly before the original lease window ends.
+	time.Sleep(12 * time.Second)
+	err = s.RenewLockLease(ctx, key, 30*time.Second)
+	require.NoError(t, err)
+
+	shortCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+
+	err = s.Lock(shortCtx, key)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "Contender lock should remain blocked after renewal")
+}
+
 func TestLeaseBasedConcurrentLocking(t *testing.T) {
 	s := setupTestStorage(t)
 	ctx := context.Background()
