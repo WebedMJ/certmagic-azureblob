@@ -3,6 +3,7 @@ package certmagicazureblob
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/caddyserver/caddy/v2"
@@ -15,6 +16,7 @@ import (
 var (
 	_ caddyfile.Unmarshaler  = (*CaddyStorageAzureBlob)(nil)
 	_ caddy.StorageConverter = (*CaddyStorageAzureBlob)(nil)
+	_ caddy.Provisioner      = (*CaddyStorageAzureBlob)(nil)
 )
 
 // CaddyStorageAzureBlob implements a caddy storage backend for Azure Blob Storage.
@@ -54,7 +56,17 @@ func (s *CaddyStorageAzureBlob) CertMagicStorage() (certmagic.Storage, error) {
 		Credential:       s.Credential,
 	}
 
-	return storage.NewStorage(context.Background(), config)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return storage.NewStorage(ctx, config)
+}
+
+// Provision sets up the Azure Blob Storage module and validates configuration.
+// The caddy.Context parameter is required by the caddy.Provisioner interface but is
+// intentionally unused here — Provision currently only validates static config fields.
+// If future changes need logging or module loading, rename _ back to ctx.
+func (s *CaddyStorageAzureBlob) Provision(_ caddy.Context) error {
+	return s.Validate()
 }
 
 // Validate Azure Blob Storage configuration.
@@ -85,6 +97,8 @@ func (s *CaddyStorageAzureBlob) UnmarshalCaddyfile(d *caddyfile.Dispenser) error
 			s.ContainerName = value
 		case "connection_string":
 			s.ConnectionString = value
+		default:
+			return d.Errf("unrecognised option '%s'", key)
 		}
 	}
 	return nil
