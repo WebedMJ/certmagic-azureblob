@@ -191,3 +191,51 @@ func TestCertMagicDistributedLocking(t *testing.T) {
 	_ = storageBackend.Delete(ctx, lockKey+".lock")
 	t.Log("CertMagic distributed lock/unlock integration successful")
 }
+
+func TestCertMagicLockLeaseRenewal(t *testing.T) {
+	if os.Getenv("SKIP_AZURITE_TESTS") == "true" {
+		t.Skip("Azurite tests disabled via SKIP_AZURITE_TESTS environment variable")
+	}
+
+	ctx := context.Background()
+	connectionString := getTestConnectionString()
+	accountName, err := getTestAccountName()
+	if err != nil {
+		t.Skipf("Skipping test: %v", err)
+	}
+
+	storageBackend, err := storage.NewStorage(ctx, storage.Config{
+		AccountName:      accountName,
+		ContainerName:    testContainer,
+		ConnectionString: connectionString,
+	})
+	require.NoError(t, err, "Azure storage must be available for lock lease renewal test")
+
+	certmagic.Default.Storage = storageBackend
+	lockKey := "distributed-lock-renewal-test"
+
+	err = certmagic.Default.Storage.(certmagic.Locker).Lock(ctx, lockKey)
+	require.NoError(t, err, "First lock should succeed")
+
+	renewer, ok := certmagic.Default.Storage.(certmagic.LockLeaseRenewer)
+	require.True(t, ok, "Storage should implement LockLeaseRenewer")
+
+	err = renewer.RenewLockLease(ctx, lockKey, 30*time.Second)
+	require.NoError(t, err, "Lock lease renewal should succeed for active lock")
+
+	shortCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+	err = certmagic.Default.Storage.(certmagic.Locker).Lock(shortCtx, lockKey)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "Contender should remain blocked while renewed lock is held")
+
+	err = certmagic.Default.Storage.(certmagic.Locker).Unlock(ctx, lockKey)
+	require.NoError(t, err, "Unlock should succeed")
+
+	reacquireCtx, reacquireCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer reacquireCancel()
+	err = certmagic.Default.Storage.(certmagic.Locker).Lock(reacquireCtx, lockKey)
+	require.NoError(t, err, "Contender should acquire lock after release")
+
+	_ = certmagic.Default.Storage.(certmagic.Locker).Unlock(ctx, lockKey)
+	_ = storageBackend.Delete(ctx, lockKey+".lock")
+}

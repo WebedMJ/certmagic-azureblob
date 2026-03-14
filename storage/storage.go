@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -24,19 +25,31 @@ var (
 	LockExpiration int32 = 60
 	// LockPollInterval is the interval between lease acquisition retries
 	LockPollInterval = 1 * time.Second
+
+	errNoActiveLease = errors.New("no active lock lease")
 )
+
+type activeLease struct {
+	leaseClient      *lease.BlobClient
+	acquiredAt       time.Time
+	lastRenewedAt    time.Time
+	leaseDuration    time.Duration
+	lastRenewRequest time.Duration
+}
 
 // Storage is a certmagic.Storage backed by an Azure Blob Storage container
 type Storage struct {
 	containerClient *container.Client
-	// activeLocks tracks active lease clients for cleanup
-	activeLocks map[string]*lease.BlobClient
+	// activeLocks tracks active lease state per logical lock key.
+	activeLocks map[string]activeLease
+	locksMu     sync.Mutex
 }
 
 // Interface guards
 var (
-	_ certmagic.Storage = (*Storage)(nil)
-	_ certmagic.Locker  = (*Storage)(nil)
+	_ certmagic.Storage          = (*Storage)(nil)
+	_ certmagic.Locker           = (*Storage)(nil)
+	_ certmagic.LockLeaseRenewer = (*Storage)(nil)
 )
 
 //nolint:govet // fieldalignment: struct field order optimized for readability over memory
@@ -97,7 +110,7 @@ func NewStorage(ctx context.Context, config Config) (*Storage, error) {
 
 	return &Storage{
 		containerClient: containerClient,
-		activeLocks:     make(map[string]*lease.BlobClient),
+		activeLocks:     make(map[string]activeLease),
 	}, nil
 }
 
@@ -250,7 +263,13 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 		_, err := leaseClient.AcquireLease(ctx, LockExpiration, nil)
 		if err == nil {
 			// Successfully acquired the lease
-			s.activeLocks[key] = leaseClient
+			s.locksMu.Lock()
+			s.activeLocks[key] = activeLease{
+				leaseClient:   leaseClient,
+				acquiredAt:    time.Now(),
+				leaseDuration: time.Duration(LockExpiration) * time.Second,
+			}
+			s.locksMu.Unlock()
 			return nil
 		}
 
@@ -271,24 +290,52 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 	}
 }
 
+// RenewLockLease renews an active lease for the given logical lock key.
+// This only succeeds for a currently-held lock in this process.
+func (s *Storage) RenewLockLease(ctx context.Context, lockKey string, leaseDuration time.Duration) error {
+	s.locksMu.Lock()
+	state, exists := s.activeLocks[lockKey]
+	s.locksMu.Unlock()
+	if !exists {
+		return fmt.Errorf("renewing lease for %s: %w", lockKey, errNoActiveLease)
+	}
+
+	_, err := state.leaseClient.RenewLease(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("renewing lease for %s: %w", lockKey, err)
+	}
+
+	s.locksMu.Lock()
+	current, ok := s.activeLocks[lockKey]
+	if ok {
+		current.lastRenewedAt = time.Now()
+		current.lastRenewRequest = leaseDuration
+		s.activeLocks[lockKey] = current
+	}
+	s.locksMu.Unlock()
+
+	return nil
+}
+
 // Unlock releases the lock for key by releasing the Azure Blob lease.
 func (s *Storage) Unlock(ctx context.Context, key string) error {
-	// Get the lease client from active locks
-	leaseClient, exists := s.activeLocks[key]
+	s.locksMu.Lock()
+	state, exists := s.activeLocks[key]
+	s.locksMu.Unlock()
 	if !exists {
 		// Lock was not acquired or already released
 		return nil
 	}
 
-	// Remove from active locks immediately to prevent double-release
-	delete(s.activeLocks, key)
-
 	// Release the lease
-	_, err := leaseClient.ReleaseLease(ctx, nil)
+	_, err := state.leaseClient.ReleaseLease(ctx, nil)
 	if err != nil {
-		// Log error but don't fail - the lease will expire anyway
 		return fmt.Errorf("releasing lease for %s: %w", key, err)
 	}
+
+	s.locksMu.Lock()
+	delete(s.activeLocks, key)
+	s.locksMu.Unlock()
 
 	return nil
 }
