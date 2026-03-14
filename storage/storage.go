@@ -237,15 +237,21 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 	// Create blob client for the lock blob
 	blobClient := s.containerClient.NewBlobClient(lockKey)
 
-	// Ensure the lock blob exists. Always attempt creation; ignore conflict (already exists).
+	// Ensure the lock blob exists. Always attempt creation unconditionally to avoid a
+	// TOCTOU race. Two response codes are expected and safe to ignore:
+	//   409 Conflict      — blob already exists (created by another caller first)
+	//   412 Precondition  — blob exists and is currently leased; we cannot overwrite
+	//                       it without a lease ID, but it already exists so we proceed.
+	// Any other error is a genuine failure and is returned to the caller.
 	blockBlobClient := s.containerClient.NewBlockBlobClient(lockKey)
 	_, uploadErr := blockBlobClient.UploadBuffer(ctx, []byte(""), nil)
 	if uploadErr != nil {
 		var respErr *azcore.ResponseError
-		if !errors.As(uploadErr, &respErr) || respErr.StatusCode != 409 {
+		if errors.As(uploadErr, &respErr) && (respErr.StatusCode == 409 || respErr.StatusCode == 412) {
+			// Blob already exists or is leased — either way it exists, which is all we need.
+		} else {
 			return fmt.Errorf("ensuring lock blob exists %s: %w", lockKey, uploadErr)
 		}
-		// 409 Conflict means the blob already exists — that is fine.
 	}
 
 	// Create lease client
