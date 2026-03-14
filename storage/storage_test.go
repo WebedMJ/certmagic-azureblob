@@ -475,6 +475,70 @@ func TestListRecursiveBehavior(t *testing.T) {
 	t.Log("Recursive behavior test completed successfully")
 }
 
+// TestListPrefixFiltering verifies that List() returns only blobs whose keys start
+// with the requested prefix and never returns blobs belonging to a different prefix.
+func TestListPrefixFiltering(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+
+	prefixA := "prefix-filter-a/"
+	prefixB := "prefix-filter-b/"
+
+	keysA := []string{
+		prefixA + "file1.txt",
+		prefixA + "file2.txt",
+		prefixA + "sub/file3.txt",
+	}
+	keysB := []string{
+		prefixB + "other1.txt",
+		prefixB + "other2.txt",
+	}
+
+	// Store blobs under both prefixes
+	for _, key := range append(keysA, keysB...) {
+		err := s.Store(ctx, key, []byte("content"))
+		require.NoError(t, err, "Failed to store key: %s", key)
+	}
+
+	t.Cleanup(func() {
+		for _, key := range append(keysA, keysB...) {
+			_ = s.Delete(ctx, key)
+		}
+	})
+
+	// List with prefix A (recursive) — must include all A keys and no B keys
+	resultA, err := s.List(ctx, prefixA, true)
+	require.NoError(t, err)
+
+	resultAMap := make(map[string]bool, len(resultA))
+	for _, k := range resultA {
+		resultAMap[k] = true
+	}
+
+	for _, key := range keysA {
+		assert.True(t, resultAMap[key], "prefix-A key %q should appear in listing for prefix %q", key, prefixA)
+	}
+	for _, key := range keysB {
+		assert.False(t, resultAMap[key], "prefix-B key %q must NOT appear in listing for prefix %q", key, prefixA)
+	}
+
+	// List with prefix B (recursive) — must include all B keys and no A keys
+	resultB, err := s.List(ctx, prefixB, true)
+	require.NoError(t, err)
+
+	resultBMap := make(map[string]bool, len(resultB))
+	for _, k := range resultB {
+		resultBMap[k] = true
+	}
+
+	for _, key := range keysB {
+		assert.True(t, resultBMap[key], "prefix-B key %q should appear in listing for prefix %q", key, prefixB)
+	}
+	for _, key := range keysA {
+		assert.False(t, resultBMap[key], "prefix-A key %q must NOT appear in listing for prefix %q", key, prefixB)
+	}
+}
+
 // Test Stat on a non-existent key (should return fs.ErrNotExist)
 func TestStatNonExistentKey(t *testing.T) {
 	s := setupTestStorage(t)
