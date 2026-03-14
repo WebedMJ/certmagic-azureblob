@@ -198,33 +198,6 @@ func TestLockingOperations(t *testing.T) {
 	_ = s.Delete(ctx, lockKey)
 }
 
-func TestConcurrentLocking(t *testing.T) {
-	s := setupTestStorage(t)
-	ctx := context.Background()
-
-	key := "concurrent-lock-test"
-
-	// First lock should succeed
-	err := s.Lock(ctx, key)
-	require.NoError(t, err)
-
-	// Unlock first lock
-	err = s.Unlock(ctx, key)
-	require.NoError(t, err)
-
-	// Second lock attempt should now succeed
-	err2 := s.Lock(ctx, key)
-	require.NoError(t, err2)
-
-	// Unlock second lock
-	err = s.Unlock(ctx, key)
-	require.NoError(t, err)
-
-	// Clean up any remaining lock files
-	lockKey := key + ".lock"
-	_ = s.Delete(ctx, lockKey)
-}
-
 func TestLeaseBasedConcurrentLocking(t *testing.T) {
 	s := setupTestStorage(t)
 	ctx := context.Background()
@@ -265,8 +238,7 @@ func TestLoadNonExistentKey(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := s.Load(ctx, "non-existent-key")
-	assert.Error(t, err)
-	// Azure SDK returns specific error types for not found
+	assert.ErrorIs(t, err, os.ErrNotExist, "Load on non-existent key should return os.ErrNotExist")
 }
 
 func TestCreatePersistentFiles(t *testing.T) {

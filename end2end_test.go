@@ -142,7 +142,24 @@ func TestCertMagicDistributedLocking(t *testing.T) {
 	err = <-firstLockAcquired
 	require.NoError(t, err, "First lock should succeed")
 
-	// Try to acquire the same lock in another goroutine (should block until released)
+	// While first lock is held, a second lock attempt with short timeout must fail.
+	blockedAttemptErr := make(chan error, 1)
+	go func() {
+		shortCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+		defer cancel()
+
+		err := certmagic.Default.Storage.(certmagic.Locker).Lock(shortCtx, lockKey)
+		blockedAttemptErr <- err
+		if err == nil {
+			_ = certmagic.Default.Storage.(certmagic.Locker).Unlock(ctx, lockKey)
+		}
+	}()
+
+	err = <-blockedAttemptErr
+	require.Error(t, err, "Second lock attempt should fail while first lock is held")
+	require.Equal(t, context.DeadlineExceeded, err, "Second lock should block until timeout while first lock is held")
+
+	// Try to acquire the same lock in another goroutine after release (should succeed)
 	secondLockAcquired := make(chan error, 1)
 	go func() {
 		err := certmagic.Default.Storage.(certmagic.Locker).Lock(ctx, lockKey)
@@ -151,9 +168,6 @@ func TestCertMagicDistributedLocking(t *testing.T) {
 			_ = certmagic.Default.Storage.(certmagic.Locker).Unlock(ctx, lockKey)
 		}
 	}()
-
-	// Wait a moment to ensure the second goroutine is blocked
-	time.Sleep(2 * time.Second)
 
 	// Release the first lock
 	released <- struct{}{}
@@ -169,7 +183,8 @@ func TestCertMagicDistributedLocking(t *testing.T) {
 	select {
 	case err := <-firstUnlockErr:
 		require.NoError(t, err, "Unlock should succeed")
-	default:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Timed out waiting for first unlock result")
 	}
 
 	// Clean up lock blob
