@@ -62,7 +62,10 @@ func (s *CaddyStorageAzureBlob) CertMagicStorage() (certmagic.Storage, error) {
 }
 
 // Provision sets up the Azure Blob Storage module and validates configuration.
-func (s *CaddyStorageAzureBlob) Provision(ctx caddy.Context) error {
+// The caddy.Context parameter is required by the caddy.Provisioner interface but is
+// intentionally unused here — Provision currently only validates static config fields.
+// If future changes need logging or module loading, rename _ back to ctx.
+func (s *CaddyStorageAzureBlob) Provision(_ caddy.Context) error {
 	return s.Validate()
 }
 
