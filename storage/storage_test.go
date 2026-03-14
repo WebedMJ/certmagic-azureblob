@@ -516,6 +516,13 @@ func TestLockLeaseExpiration(t *testing.T) {
 	ctx := context.Background()
 	key := "lease-expiration-test"
 
+	// Use the minimum valid fixed lease duration to keep the test fast.
+	originalLockExpiration := LockExpiration
+	LockExpiration = 15
+	t.Cleanup(func() {
+		LockExpiration = originalLockExpiration
+	})
+
 	// Acquire lock
 	err := s.Lock(ctx, key)
 	require.NoError(t, err)
