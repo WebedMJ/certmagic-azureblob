@@ -18,7 +18,9 @@ import (
 )
 
 var (
-	// LockExpiration in seconds is the duration before which a Lock is considered expired (Azure lease duration)
+	// LockExpiration in seconds is the Azure lease duration for lock blobs.
+	// Azure Blob fixed lease durations must be in [15, 60] seconds (or -1 for infinite lease).
+	// Use the max fixed duration and rely on retries when contention exists.
 	LockExpiration int32 = 60
 	// LockPollInterval is the interval between lease acquisition retries
 	LockPollInterval = 1 * time.Second

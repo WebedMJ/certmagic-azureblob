@@ -25,7 +25,6 @@ In this section, we create a Caddy config using our Azure Blob Storage backend.
 #### Getting started
 
 1. **Set up Azure Storage Account**
-
    - Create an Azure Storage Account
    - Create a blob container (e.g., `caddy-data`)
      - The module will create the container if it doesn't exist and has enough permissions
@@ -152,6 +151,19 @@ This module supports several Azure authentication methods:
 4. Default Azure credential chain
 
 ## Running Tests
+
+Recommended command set (same pattern used in CI) to keep regressions visible:
+
+```sh
+# 1) Focused lock/lease regressions
+go test ./... -v -count=1 -timeout=120s -run 'Test(CertMagicDistributedLocking|LockingOperations|LeaseBasedConcurrentLocking|LockLeaseExpiration)$'
+
+# 2) Full suite, uncached
+go test ./... -v -count=1 -timeout=180s
+
+# 3) Race detector
+go test ./... -race -count=1 -timeout=240s
+```
 
 The tests support multiple authentication methods, mirroring the behavior of the real module:
 
