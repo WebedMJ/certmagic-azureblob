@@ -33,7 +33,10 @@ jobs:
 
       - name: Install Azurite
         id: azurite
-        uses: potatoqualitee/azuright@v1.1
+        run: |
+          npm install -g azurite
+          mkdir azurite
+          azurite --skipApiVersionCheck --silent --location azurite --debug azurite\debug.log &
 
       - name: Download dependencies
         run: go mod download
@@ -41,5 +44,5 @@ jobs:
       - name: Run tests
         run: go test -v ./...
         env:
-          AZURE_STORAGE_CONNECTION_STRING: "${{ steps.azurite.outputs.connstring }}"
+          AZURITE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
           AZURE_STORAGE_ACCOUNT: "devstoreaccount1"
