@@ -247,11 +247,10 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 	_, uploadErr := blockBlobClient.UploadBuffer(ctx, []byte(""), nil)
 	if uploadErr != nil {
 		var respErr *azcore.ResponseError
-		if errors.As(uploadErr, &respErr) && (respErr.StatusCode == 409 || respErr.StatusCode == 412) {
-			// Blob already exists or is leased — either way it exists, which is all we need.
-		} else {
+		if !errors.As(uploadErr, &respErr) || (respErr.StatusCode != 409 && respErr.StatusCode != 412) {
 			return fmt.Errorf("ensuring lock blob exists %s: %w", lockKey, uploadErr)
 		}
+		// 409 Conflict or 412 Precondition: blob already exists or is leased — either way it exists, which is all we need.
 	}
 
 	// Create lease client
