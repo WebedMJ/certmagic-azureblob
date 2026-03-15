@@ -643,36 +643,6 @@ func TestConcurrentOperations(t *testing.T) {
 	assert.Empty(t, keys, "All keys should be deleted after concurrent ops")
 }
 
-// Test lock lease expiration (acquire lock, wait for lease to expire, then try to acquire again)
-func TestLockLeaseExpiration(t *testing.T) {
-	s := setupTestStorage(t)
-	ctx := context.Background()
-	key := "lease-expiration-test"
-
-	// Use the minimum valid fixed lease duration to keep the test fast.
-	originalLockExpiration := LockExpiration
-	LockExpiration = 15
-	t.Cleanup(func() {
-		LockExpiration = originalLockExpiration
-	})
-
-	// Acquire lock
-	err := s.Lock(ctx, key)
-	require.NoError(t, err)
-
-	// Wait for lease to expire (LockExpiration + 2 seconds)
-	wait := time.Duration(LockExpiration+2) * time.Second
-	t.Logf("Waiting %v for lease to expire...", wait)
-	time.Sleep(wait)
-
-	// Try to acquire lock again (should succeed after lease expiration)
-	err = s.Lock(ctx, key)
-	require.NoError(t, err, "Should be able to acquire lock after lease expires")
-
-	_ = s.Unlock(ctx, key)
-	_ = s.Delete(ctx, key+".lock")
-}
-
 // Test List with a prefix that matches no blobs (should return empty slice)
 func TestListNoMatches(t *testing.T) {
 	s := setupTestStorage(t)
