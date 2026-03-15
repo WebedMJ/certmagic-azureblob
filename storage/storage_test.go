@@ -695,3 +695,112 @@ func TestDeleteSpecialCharacterKey(t *testing.T) {
 	exists := s.Exists(ctx, key)
 	assert.False(t, exists, "Key with special characters should be deleted")
 }
+
+// TestBackgroundLeaseRenewalPreventsExpiry verifies that the background renewal
+// goroutine keeps the Azure blob lease alive well past its natural expiry duration.
+func TestBackgroundLeaseRenewalPreventsExpiry(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "bg-renewal-prevents-expiry-test"
+
+	originalLockExpiration := LockExpiration
+	LockExpiration = 15
+	t.Cleanup(func() {
+		LockExpiration = originalLockExpiration
+		_ = s.Unlock(context.Background(), key)
+		_ = s.Delete(context.Background(), key+".lock")
+	})
+
+	err := s.Lock(ctx, key)
+	require.NoError(t, err)
+
+	// Sleep well past the 15s lease duration. Without background renewal the lease
+	// would have expired, but the goroutine renews every ~10s so it should stay alive.
+	t.Logf("Sleeping 25s to verify background renewal keeps lease alive past natural expiry...")
+	time.Sleep(25 * time.Second)
+
+	// A contender must not be able to acquire the lock — the lease is still held.
+	contender := setupTestStorage(t)
+	shortCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	err = contender.Lock(shortCtx, key)
+	require.ErrorIs(t, err, context.DeadlineExceeded,
+		"Contender should be blocked because background renewal kept the lease alive")
+}
+
+// TestBackgroundRenewalStopsOnUnlock verifies that the background renewal goroutine
+// is cancelled when Unlock is called, allowing the lease to expire and the lock to
+// be acquired by another process.
+func TestBackgroundRenewalStopsOnUnlock(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "bg-renewal-stops-on-unlock-test"
+
+	originalLockExpiration := LockExpiration
+	LockExpiration = 15
+	t.Cleanup(func() {
+		LockExpiration = originalLockExpiration
+		_ = s.Delete(context.Background(), key+".lock")
+	})
+
+	err := s.Lock(ctx, key)
+	require.NoError(t, err)
+
+	// Immediately unlock — this should cancel the background goroutine and release the lease.
+	err = s.Unlock(ctx, key)
+	require.NoError(t, err)
+
+	// Sleep past the lease duration to ensure the released lease is fully gone.
+	t.Logf("Sleeping 17s to let the released lease window pass...")
+	time.Sleep(17 * time.Second)
+
+	// Contender should now be able to acquire the lock because the lease was released.
+	contender := setupTestStorage(t)
+	shortCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	err = contender.Lock(shortCtx, key)
+	require.NoError(t, err, "Contender should acquire lock after original holder unlocked")
+
+	_ = contender.Unlock(ctx, key)
+}
+
+// TestRenewLockLeaseRestartsBackgroundRenewal verifies that calling RenewLockLease
+// restarts the background renewal goroutine, keeping the lease alive even when
+// certmagic's RenewLockLease calls are spaced far apart.
+func TestRenewLockLeaseRestartsBackgroundRenewal(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "renew-restarts-bg-renewal-test"
+
+	originalLockExpiration := LockExpiration
+	LockExpiration = 15
+	t.Cleanup(func() {
+		LockExpiration = originalLockExpiration
+		_ = s.Unlock(context.Background(), key)
+		_ = s.Delete(context.Background(), key+".lock")
+	})
+
+	err := s.Lock(ctx, key)
+	require.NoError(t, err)
+
+	// Sleep 10 seconds, then call RenewLockLease to simulate certmagic's renewal call.
+	time.Sleep(10 * time.Second)
+	err = s.RenewLockLease(ctx, key, 30*time.Second)
+	require.NoError(t, err, "RenewLockLease should succeed")
+
+	// Sleep another 20 seconds (~30s total from Lock). The original 15s lease would
+	// have long expired without the restarted background goroutine keeping it alive.
+	t.Logf("Sleeping 20s after RenewLockLease to verify restarted goroutine keeps lease alive...")
+	time.Sleep(20 * time.Second)
+
+	// Contender must still be blocked — the restarted goroutine keeps the lease active.
+	contender := setupTestStorage(t)
+	shortCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	err = contender.Lock(shortCtx, key)
+	require.ErrorIs(t, err, context.DeadlineExceeded,
+		"Contender should be blocked because restarted background renewal kept the lease alive")
+}
