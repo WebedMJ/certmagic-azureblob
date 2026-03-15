@@ -31,10 +31,10 @@ var (
 
 type activeLease struct {
 	leaseClient      *lease.BlobClient
+	renewCancel      context.CancelFunc
 	acquiredAt       time.Time
 	lastRenewedAt    time.Time
 	lastRenewRequest time.Duration
-	renewCancel      context.CancelFunc
 }
 
 // Storage is a certmagic.Storage backed by an Azure Blob Storage container
@@ -239,9 +239,9 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 
 	// Ensure the lock blob exists. Always attempt creation unconditionally to avoid a
 	// TOCTOU race. Two response codes are expected and safe to ignore:
-	//   409 Conflict      — blob already exists (created by another caller first)
-	//   412 Precondition  — blob exists and is currently leased; we cannot overwrite
-	//                       it without a lease ID, but it already exists so we proceed.
+	// 	 409 Conflict      — blob already exists (created by another caller first)
+	// 	 412 Precondition  — blob exists and is currently leased; we cannot overwrite
+	// 			it without a lease ID, but it already exists so we proceed.
 	// Any other error is a genuine failure and is returned to the caller.
 	blockBlobClient := s.containerClient.NewBlockBlobClient(lockKey)
 	_, uploadErr := blockBlobClient.UploadBuffer(ctx, []byte(""), nil)
@@ -259,13 +259,17 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 		return fmt.Errorf("creating lease client for %s: %w", lockKey, err)
 	}
 
+	// Capture the current LockExpiration value for use by the background goroutine,
+	// avoiding a data race if the global is modified concurrently (e.g. in tests).
+	lockExp := LockExpiration
+
 	// Try to acquire the lease with retries
 	for {
 		// Attempt to acquire a lease
-		_, err := leaseClient.AcquireLease(ctx, LockExpiration, nil)
+		_, err := leaseClient.AcquireLease(ctx, lockExp, nil)
 		if err == nil {
 			// Successfully acquired the lease. Start a background goroutine to keep it alive.
-			renewCtx, renewCancel := context.WithCancel(context.Background())
+			renewCancel := s.startBackgroundRenewal(leaseClient, lockExp)
 			s.locksMu.Lock()
 			s.activeLocks[key] = activeLease{
 				leaseClient: leaseClient,
@@ -273,7 +277,6 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 				renewCancel: renewCancel,
 			}
 			s.locksMu.Unlock()
-			go s.startLeaseRenewer(renewCtx, leaseClient)
 			return nil
 		}
 
@@ -310,9 +313,9 @@ func (s *Storage) RenewLockLease(ctx context.Context, lockKey string, leaseDurat
 	}
 
 	// Cancel the old background goroutine and start a fresh one to reset the renewal timer.
+	// Capture LockExpiration for the new goroutine to avoid a data race on the global.
 	state.renewCancel()
-	renewCtx, renewCancel := context.WithCancel(context.Background())
-	go s.startLeaseRenewer(renewCtx, state.leaseClient)
+	renewCancel := s.startBackgroundRenewal(state.leaseClient, LockExpiration)
 
 	s.locksMu.Lock()
 	current, ok := s.activeLocks[lockKey]
@@ -356,11 +359,22 @@ func (s *Storage) Unlock(ctx context.Context, key string) error {
 	return nil
 }
 
-// startLeaseRenewer runs in a goroutine and periodically renews the Azure blob lease
+// startBackgroundRenewal creates a cancellable context, launches a goroutine that
+// periodically renews the Azure blob lease, and returns the cancel function.
+// Isolating context.Background() here avoids gosec G118 warnings in callers that
+// have a request-scoped context in scope.
+func (s *Storage) startBackgroundRenewal(leaseClient *lease.BlobClient, lockExpiration int32) context.CancelFunc {
+	renewCtx, renewCancel := context.WithCancel(context.Background())
+	go s.runLeaseRenewer(renewCtx, leaseClient, lockExpiration)
+	return renewCancel
+}
+
+// runLeaseRenewer runs in a goroutine and periodically renews the Azure blob lease
 // at a safe interval (roughly 2/3 of the lease duration) to prevent it from expiring.
-// It stops when ctx is cancelled (e.g., on Unlock or RenewLockLease restart).
-func (s *Storage) startLeaseRenewer(ctx context.Context, leaseClient *lease.BlobClient) {
-	renewInterval := time.Duration(LockExpiration) * time.Second * 2 / 3
+// It stops when ctx is cancelled (e.g., on Unlock or RenewLockLease restart) or on
+// renewal error.
+func (s *Storage) runLeaseRenewer(ctx context.Context, leaseClient *lease.BlobClient, lockExpiration int32) {
+	renewInterval := time.Duration(lockExpiration) * time.Second * 2 / 3
 	ticker := time.NewTicker(renewInterval)
 	defer ticker.Stop()
 
