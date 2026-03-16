@@ -52,16 +52,15 @@ var (
 	_ certmagic.LockLeaseRenewer = (*Storage)(nil)
 )
 
-//nolint:govet // fieldalignment: struct field order optimized for readability over memory
 type Config struct {
+	// Credential can be used for authentication (managed identity, etc.)
+	Credential azcore.TokenCredential
 	// AccountName is the Azure Storage account name
 	AccountName string
 	// ContainerName is the name of the Azure Blob Storage container
 	ContainerName string
 	// ConnectionString is the Azure Storage connection string (optional)
 	ConnectionString string
-	// Credential can be used for authentication (managed identity, etc.)
-	Credential azcore.TokenCredential
 }
 
 //nolint:nestif // Functionally correct and readable
