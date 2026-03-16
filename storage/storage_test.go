@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"testing"
 	"time"
@@ -75,7 +76,7 @@ func TestAzureBlobStorageOperations(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, key, info.Key)
 	assert.Equal(t, int64(len(content)), info.Size)
-	assert.True(t, info.IsTerminal) // files are terminal
+	assert.True(t, info.IsTerminal, "Stat should indicate file") // files are terminal
 	assert.False(t, info.Modified.IsZero())
 
 	// Test Delete operation
@@ -372,7 +373,7 @@ func TestLoadNonExistentKey(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := s.Load(ctx, "non-existent-key")
-	assert.ErrorIs(t, err, os.ErrNotExist, "Load on non-existent key should return os.ErrNotExist")
+	assert.ErrorIs(t, err, fs.ErrNotExist, "Load on non-existent key should return fs.ErrNotExist")
 }
 
 func TestListRecursiveBehavior(t *testing.T) {
@@ -544,7 +545,7 @@ func TestStatNonExistentKey(t *testing.T) {
 	s := setupTestStorage(t)
 	ctx := context.Background()
 	_, err := s.Stat(ctx, "definitely-not-a-real-key.txt")
-	assert.ErrorIs(t, err, os.ErrNotExist, "Stat on non-existent key should return os.ErrNotExist")
+	assert.ErrorIs(t, err, fs.ErrNotExist, "Stat on non-existent key should return fs.ErrNotExist")
 }
 
 // Test storing and loading a very large blob (>10MB)
@@ -643,36 +644,6 @@ func TestConcurrentOperations(t *testing.T) {
 	assert.Empty(t, keys, "All keys should be deleted after concurrent ops")
 }
 
-// Test lock lease expiration (acquire lock, wait for lease to expire, then try to acquire again)
-func TestLockLeaseExpiration(t *testing.T) {
-	s := setupTestStorage(t)
-	ctx := context.Background()
-	key := "lease-expiration-test"
-
-	// Use the minimum valid fixed lease duration to keep the test fast.
-	originalLockExpiration := LockExpiration
-	LockExpiration = 15
-	t.Cleanup(func() {
-		LockExpiration = originalLockExpiration
-	})
-
-	// Acquire lock
-	err := s.Lock(ctx, key)
-	require.NoError(t, err)
-
-	// Wait for lease to expire (LockExpiration + 2 seconds)
-	wait := time.Duration(LockExpiration+2) * time.Second
-	t.Logf("Waiting %v for lease to expire...", wait)
-	time.Sleep(wait)
-
-	// Try to acquire lock again (should succeed after lease expiration)
-	err = s.Lock(ctx, key)
-	require.NoError(t, err, "Should be able to acquire lock after lease expires")
-
-	_ = s.Unlock(ctx, key)
-	_ = s.Delete(ctx, key+".lock")
-}
-
 // Test List with a prefix that matches no blobs (should return empty slice)
 func TestListNoMatches(t *testing.T) {
 	s := setupTestStorage(t)
@@ -694,4 +665,184 @@ func TestDeleteSpecialCharacterKey(t *testing.T) {
 	require.NoError(t, err)
 	exists := s.Exists(ctx, key)
 	assert.False(t, exists, "Key with special characters should be deleted")
+}
+
+// TestBackgroundLeaseRenewalPreventsExpiry verifies that the background renewal
+// goroutine keeps the Azure blob lease alive well past its natural expiry duration.
+func TestBackgroundLeaseRenewalPreventsExpiry(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "bg-renewal-prevents-expiry-test"
+
+	originalLockExpiration := LockExpiration
+	LockExpiration = 15
+	t.Cleanup(func() {
+		LockExpiration = originalLockExpiration
+		_ = s.Unlock(context.Background(), key)
+		_ = s.Delete(context.Background(), key+".lock")
+	})
+
+	err := s.Lock(ctx, key)
+	require.NoError(t, err)
+
+	// Sleep well past the 15s lease duration. Without background renewal the lease
+	// would have expired, but the goroutine renews every ~10s so it should stay alive.
+	t.Logf("Sleeping 25s to verify background renewal keeps lease alive past natural expiry...")
+	time.Sleep(25 * time.Second)
+
+	// A contender must not be able to acquire the lock — the lease is still held.
+	contender := setupTestStorage(t)
+	shortCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	err = contender.Lock(shortCtx, key)
+	require.ErrorIs(t, err, context.DeadlineExceeded,
+		"Contender should be blocked because background renewal kept the lease alive")
+}
+
+// TestBackgroundRenewalStopsOnUnlock verifies that the background renewal goroutine
+// is cancelled when Unlock is called, allowing the lease to expire and the lock to
+// be acquired by another process.
+func TestBackgroundRenewalStopsOnUnlock(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "bg-renewal-stops-on-unlock-test"
+
+	originalLockExpiration := LockExpiration
+	LockExpiration = 15
+	t.Cleanup(func() {
+		LockExpiration = originalLockExpiration
+		_ = s.Delete(context.Background(), key+".lock")
+	})
+
+	err := s.Lock(ctx, key)
+	require.NoError(t, err)
+
+	// Immediately unlock — this should cancel the background goroutine and release the lease.
+	err = s.Unlock(ctx, key)
+	require.NoError(t, err)
+
+	// Sleep past the lease duration to ensure the released lease is fully gone.
+	t.Logf("Sleeping 17s to let the released lease window pass...")
+	time.Sleep(17 * time.Second)
+
+	// Contender should now be able to acquire the lock because the lease was released.
+	contender := setupTestStorage(t)
+	shortCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	err = contender.Lock(shortCtx, key)
+	require.NoError(t, err, "Contender should acquire lock after original holder unlocked")
+
+	_ = contender.Unlock(ctx, key)
+}
+
+// TestRenewLockLeaseRestartsBackgroundRenewal verifies that calling RenewLockLease
+// restarts the background renewal goroutine, keeping the lease alive even when
+// certmagic's RenewLockLease calls are spaced far apart.
+func TestRenewLockLeaseRestartsBackgroundRenewal(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "renew-restarts-bg-renewal-test"
+
+	originalLockExpiration := LockExpiration
+	LockExpiration = 15
+	t.Cleanup(func() {
+		LockExpiration = originalLockExpiration
+		_ = s.Unlock(context.Background(), key)
+		_ = s.Delete(context.Background(), key+".lock")
+	})
+
+	err := s.Lock(ctx, key)
+	require.NoError(t, err)
+
+	// Sleep 10 seconds, then call RenewLockLease to simulate certmagic's renewal call.
+	time.Sleep(10 * time.Second)
+	err = s.RenewLockLease(ctx, key, 30*time.Second)
+	require.NoError(t, err, "RenewLockLease should succeed")
+
+	// Sleep another 20 seconds (~30s total from Lock). The original 15s lease would
+	// have long expired without the restarted background goroutine keeping it alive.
+	t.Logf("Sleeping 20s after RenewLockLease to verify restarted goroutine keeps lease alive...")
+	time.Sleep(20 * time.Second)
+
+	// Contender must still be blocked — the restarted goroutine keeps the lease active.
+	contender := setupTestStorage(t)
+	shortCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	err = contender.Lock(shortCtx, key)
+	require.ErrorIs(t, err, context.DeadlineExceeded,
+		"Contender should be blocked because restarted background renewal kept the lease alive")
+}
+
+// Test Stat on a directory (should return correct info)
+func TestStatDirectoryKey(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+
+	prefix := "stat-dir-test/"
+	fileKey := prefix + "file.txt"
+	fileContent := []byte("directory stat test")
+
+	// Store a file under the directory prefix
+	err := s.Store(ctx, fileKey, fileContent)
+	require.NoError(t, err)
+
+	// Stat the directory prefix itself
+	info, err := s.Stat(ctx, prefix)
+	assert.ErrorIs(t, err, fs.ErrNotExist, "Stat on directory prefix should return fs.ErrNotExist")
+	assert.False(t, info.IsTerminal, "Stat should indicate directory") // directories are not terminal
+
+	// Clean up
+	_ = s.Delete(ctx, fileKey)
+}
+
+// Test Delete on a directory prefix deletes all child keys
+func TestDeleteDirectoryPrefixDeletesChildren(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+
+	prefix := "delete-dir-test/"
+	childKeys := []string{
+		prefix + "file1.txt",
+		prefix + "sub/file2.txt",
+	}
+
+	for _, key := range childKeys {
+		err := s.Store(ctx, key, []byte("child content"))
+		require.NoError(t, err)
+	}
+
+	// Delete the directory prefix
+	err := s.Delete(ctx, prefix)
+	require.NoError(t, err, "Delete on directory prefix should succeed")
+
+	// All child keys should be gone
+	for _, key := range childKeys {
+		exists := s.Exists(ctx, key)
+		assert.False(t, exists, "Child key should be deleted by directory prefix delete")
+	}
+}
+
+// Test context cancellation for Store, Delete, Stat
+func TestContextCancellationForStoreDeleteStat(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "cancel-test/file.txt"
+	content := []byte("cancel test content")
+
+	// Store with cancelled context
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	err := s.Store(cancelCtx, key, content)
+	assert.Error(t, err, "Store should honor context cancellation")
+
+	// Delete with cancelled context
+	err = s.Delete(cancelCtx, key)
+	assert.Error(t, err, "Delete should honor context cancellation")
+
+	// Stat with cancelled context
+	_, err = s.Stat(cancelCtx, key)
+	assert.Error(t, err, "Stat should honor context cancellation")
 }

@@ -31,9 +31,9 @@ var (
 
 type activeLease struct {
 	leaseClient      *lease.BlobClient
+	renewCancel      context.CancelFunc
 	acquiredAt       time.Time
 	lastRenewedAt    time.Time
-	leaseDuration    time.Duration
 	lastRenewRequest time.Duration
 }
 
@@ -52,16 +52,15 @@ var (
 	_ certmagic.LockLeaseRenewer = (*Storage)(nil)
 )
 
-//nolint:govet // fieldalignment: struct field order optimized for readability over memory
 type Config struct {
+	// Credential can be used for authentication (managed identity, etc.)
+	Credential azcore.TokenCredential
 	// AccountName is the Azure Storage account name
 	AccountName string
 	// ContainerName is the name of the Azure Blob Storage container
 	ContainerName string
 	// ConnectionString is the Azure Storage connection string (optional)
 	ConnectionString string
-	// Credential can be used for authentication (managed identity, etc.)
-	Credential azcore.TokenCredential
 }
 
 //nolint:nestif // Functionally correct and readable
@@ -151,19 +150,48 @@ func (s *Storage) Load(ctx context.Context, key string) ([]byte, error) {
 
 // Delete deletes key. An error should be returned only if the key still exists when the method returns.
 func (s *Storage) Delete(ctx context.Context, key string) error {
-	blobClient := s.containerClient.NewBlobClient(key)
-
-	_, err := blobClient.Delete(ctx, nil)
-	if err != nil {
-		// Check if blob doesn't exist (404 error)
-		var responseError *azcore.ResponseError
-		if errors.As(err, &responseError) && responseError.StatusCode == 404 {
-			// Blob doesn't exist - this is OK for Delete (idempotent behavior)
-			// CertMagic interface: "error should be returned only if key still exists"
-			// Since key doesn't exist, we return success
+	// Check if key is a file or directory
+	info, err := s.Stat(ctx, key)
+	var keysToDelete []string
+	switch {
+	case err == nil:
+		// Assume that this is a file and it exists, so delete it directly
+		keysToDelete = []string{key}
+	case errors.Is(err, fs.ErrNotExist):
+		// If Stat returns not exist, treat as already deleted for files (terminal=true)
+		if info.IsTerminal {
+			// File does not exist, idempotent
 			return nil
 		}
-		return fmt.Errorf("deleting blob %s: %w", key, err)
+		// If it's not terminal, it could be a directory that doesn't exist or is empty - try listing
+		childKeys, listErr := s.List(ctx, key, true)
+		if listErr != nil {
+			// If listing fails, treat as already deleted
+			return nil
+		}
+		if len(childKeys) == 0 {
+			return nil
+		}
+		keysToDelete = childKeys
+
+	default:
+		return fmt.Errorf("stat for delete %s: %w", key, err)
+	}
+
+	var deleteErrs []string
+	for _, delKey := range keysToDelete {
+		blobClient := s.containerClient.NewBlobClient(delKey)
+		_, err := blobClient.Delete(ctx, nil)
+		if err != nil {
+			var responseError *azcore.ResponseError
+			if errors.As(err, &responseError) && responseError.StatusCode == 404 {
+				continue // Already deleted
+			}
+			deleteErrs = append(deleteErrs, fmt.Sprintf("%s: %v", delKey, err))
+		}
+	}
+	if len(deleteErrs) > 0 {
+		return fmt.Errorf("errors deleting blobs: %s", strings.Join(deleteErrs, "; "))
 	}
 	return nil
 }
@@ -218,6 +246,8 @@ func (s *Storage) Stat(ctx context.Context, key string) (certmagic.KeyInfo, erro
 		// Check if blob doesn't exist
 		var responseError *azcore.ResponseError
 		if errors.As(err, &responseError) && responseError.StatusCode == 404 {
+			// This will return a KeyInfo with IsTerminal=false
+			// which is appropriate for non-existent keys on Azure blob (could be a directory or a missing file)
 			return keyInfo, fs.ErrNotExist
 		}
 		return keyInfo, fmt.Errorf("getting properties for %s: %w", key, err)
@@ -239,9 +269,9 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 
 	// Ensure the lock blob exists. Always attempt creation unconditionally to avoid a
 	// TOCTOU race. Two response codes are expected and safe to ignore:
-	//   409 Conflict      — blob already exists (created by another caller first)
-	//   412 Precondition  — blob exists and is currently leased; we cannot overwrite
-	//                       it without a lease ID, but it already exists so we proceed.
+	// 	 409 Conflict      — blob already exists (created by another caller first)
+	// 	 412 Precondition  — blob exists and is currently leased; we cannot overwrite
+	// 			it without a lease ID, but it already exists so we proceed.
 	// Any other error is a genuine failure and is returned to the caller.
 	blockBlobClient := s.containerClient.NewBlockBlobClient(lockKey)
 	_, uploadErr := blockBlobClient.UploadBuffer(ctx, []byte(""), nil)
@@ -259,17 +289,22 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 		return fmt.Errorf("creating lease client for %s: %w", lockKey, err)
 	}
 
+	// Capture the current LockExpiration value for use by the background goroutine,
+	// avoiding a data race if the global is modified concurrently (e.g. in tests).
+	lockExp := LockExpiration
+
 	// Try to acquire the lease with retries
 	for {
 		// Attempt to acquire a lease
-		_, err := leaseClient.AcquireLease(ctx, LockExpiration, nil)
+		_, err := leaseClient.AcquireLease(ctx, lockExp, nil)
 		if err == nil {
-			// Successfully acquired the lease
+			// Successfully acquired the lease. Start a background goroutine to keep it alive.
+			renewCancel := s.startBackgroundRenewal(leaseClient, lockExp)
 			s.locksMu.Lock()
 			s.activeLocks[key] = activeLease{
-				leaseClient:   leaseClient,
-				acquiredAt:    time.Now(),
-				leaseDuration: time.Duration(LockExpiration) * time.Second,
+				leaseClient: leaseClient,
+				acquiredAt:  time.Now(),
+				renewCancel: renewCancel,
 			}
 			s.locksMu.Unlock()
 			return nil
@@ -307,12 +342,21 @@ func (s *Storage) RenewLockLease(ctx context.Context, lockKey string, leaseDurat
 		return fmt.Errorf("renewing lease for %s: %w", lockKey, err)
 	}
 
+	// Cancel the old background goroutine and start a fresh one to reset the renewal timer.
+	// Capture LockExpiration for the new goroutine to avoid a data race on the global.
+	state.renewCancel()
+	renewCancel := s.startBackgroundRenewal(state.leaseClient, LockExpiration)
+
 	s.locksMu.Lock()
 	current, ok := s.activeLocks[lockKey]
 	if ok {
 		current.lastRenewedAt = time.Now()
 		current.lastRenewRequest = leaseDuration
+		current.renewCancel = renewCancel
 		s.activeLocks[lockKey] = current
+	} else {
+		// Lock was released while we were renewing; stop the new goroutine immediately.
+		renewCancel()
 	}
 	s.locksMu.Unlock()
 
@@ -329,6 +373,9 @@ func (s *Storage) Unlock(ctx context.Context, key string) error {
 		return nil
 	}
 
+	// Stop the background renewal goroutine before releasing the lease.
+	state.renewCancel()
+
 	// Release the lease
 	_, err := state.leaseClient.ReleaseLease(ctx, nil)
 	if err != nil {
@@ -340,6 +387,39 @@ func (s *Storage) Unlock(ctx context.Context, key string) error {
 	s.locksMu.Unlock()
 
 	return nil
+}
+
+// startBackgroundRenewal creates a cancellable context, launches a goroutine that
+// periodically renews the Azure blob lease, and returns the cancel function.
+// Isolating context.Background() here avoids gosec G118 warnings in callers that
+// have a request-scoped context in scope.
+func (s *Storage) startBackgroundRenewal(leaseClient *lease.BlobClient, lockExpiration int32) context.CancelFunc {
+	renewCtx, renewCancel := context.WithCancel(context.Background())
+	go s.runLeaseRenewer(renewCtx, leaseClient, lockExpiration)
+	return renewCancel
+}
+
+// runLeaseRenewer runs in a goroutine and periodically renews the Azure blob lease
+// at a safe interval (roughly 2/3 of the lease duration) to prevent it from expiring.
+// It stops when ctx is cancelled (e.g., on Unlock or RenewLockLease restart) or on
+// renewal error.
+func (s *Storage) runLeaseRenewer(ctx context.Context, leaseClient *lease.BlobClient, lockExpiration int32) {
+	renewInterval := time.Duration(lockExpiration) * time.Second * 2 / 3
+	ticker := time.NewTicker(renewInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			_, err := leaseClient.RenewLease(context.Background(), nil)
+			if err != nil {
+				// Stop renewing on error to avoid spinning on a broken lease.
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (s *Storage) objLockName(key string) string {
