@@ -162,17 +162,18 @@ func (s *Storage) Delete(ctx context.Context, key string) error {
 		if info.IsTerminal {
 			// File does not exist, idempotent
 			return nil
-		} else {
-			childKeys, listErr := s.List(ctx, key, true)
-			if listErr != nil {
-				// If listing fails, treat as already deleted
-				return nil
-			}
-			if len(childKeys) == 0 {
-				return nil
-			}
-			keysToDelete = childKeys
 		}
+		// If it's not terminal, it could be a directory that doesn't exist or is empty - try listing
+		childKeys, listErr := s.List(ctx, key, true)
+		if listErr != nil {
+			// If listing fails, treat as already deleted
+			return nil
+		}
+		if len(childKeys) == 0 {
+			return nil
+		}
+		keysToDelete = childKeys
+
 	default:
 		return fmt.Errorf("stat for delete %s: %w", key, err)
 	}
