@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"testing"
 	"time"
@@ -372,7 +373,7 @@ func TestLoadNonExistentKey(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := s.Load(ctx, "non-existent-key")
-	assert.ErrorIs(t, err, os.ErrNotExist, "Load on non-existent key should return os.ErrNotExist")
+	assert.ErrorIs(t, err, fs.ErrNotExist, "Load on non-existent key should return fs.ErrNotExist")
 }
 
 func TestListRecursiveBehavior(t *testing.T) {
@@ -544,7 +545,7 @@ func TestStatNonExistentKey(t *testing.T) {
 	s := setupTestStorage(t)
 	ctx := context.Background()
 	_, err := s.Stat(ctx, "definitely-not-a-real-key.txt")
-	assert.ErrorIs(t, err, os.ErrNotExist, "Stat on non-existent key should return os.ErrNotExist")
+	assert.ErrorIs(t, err, fs.ErrNotExist, "Stat on non-existent key should return fs.ErrNotExist")
 }
 
 // Test storing and loading a very large blob (>10MB)
@@ -773,6 +774,55 @@ func TestRenewLockLeaseRestartsBackgroundRenewal(t *testing.T) {
 	err = contender.Lock(shortCtx, key)
 	require.ErrorIs(t, err, context.DeadlineExceeded,
 		"Contender should be blocked because restarted background renewal kept the lease alive")
+}
+
+// Test Stat on a directory (should return correct info)
+func TestStatDirectoryKey(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+
+	prefix := "stat-dir-test/"
+	fileKey := prefix + "file.txt"
+	fileContent := []byte("directory stat test")
+
+	// Store a file under the directory prefix
+	err := s.Store(ctx, fileKey, fileContent)
+	require.NoError(t, err)
+
+	// Stat the directory prefix itself
+	info, err := s.Stat(ctx, prefix)
+	assert.ErrorIs(t, err, fs.ErrNotExist, "Stat on directory prefix should return fs.ErrNotExist")
+	assert.False(t, info.IsTerminal, "Stat should indicate directory") // directories are not terminal
+
+	// Clean up
+	_ = s.Delete(ctx, fileKey)
+}
+
+// Test Delete on a directory prefix deletes all child keys
+func TestDeleteDirectoryPrefixDeletesChildren(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+
+	prefix := "delete-dir-test/"
+	childKeys := []string{
+		prefix + "file1.txt",
+		prefix + "sub/file2.txt",
+	}
+
+	for _, key := range childKeys {
+		err := s.Store(ctx, key, []byte("child content"))
+		require.NoError(t, err)
+	}
+
+	// Delete the directory prefix
+	err := s.Delete(ctx, prefix)
+	require.NoError(t, err, "Delete on directory prefix should succeed")
+
+	// All child keys should be gone
+	for _, key := range childKeys {
+		exists := s.Exists(ctx, key)
+		assert.False(t, exists, "Child key should be deleted by directory prefix delete")
+	}
 }
 
 // Test context cancellation for Store, Delete, Stat

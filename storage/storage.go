@@ -150,19 +150,47 @@ func (s *Storage) Load(ctx context.Context, key string) ([]byte, error) {
 
 // Delete deletes key. An error should be returned only if the key still exists when the method returns.
 func (s *Storage) Delete(ctx context.Context, key string) error {
-	blobClient := s.containerClient.NewBlobClient(key)
-
-	_, err := blobClient.Delete(ctx, nil)
-	if err != nil {
-		// Check if blob doesn't exist (404 error)
-		var responseError *azcore.ResponseError
-		if errors.As(err, &responseError) && responseError.StatusCode == 404 {
-			// Blob doesn't exist - this is OK for Delete (idempotent behavior)
-			// CertMagic interface: "error should be returned only if key still exists"
-			// Since key doesn't exist, we return success
+	// Check if key is a file or directory
+	info, err := s.Stat(ctx, key)
+	var keysToDelete []string
+	switch {
+	case err == nil:
+		// Assume that this is a file and it exists, so delete it directly
+		keysToDelete = []string{key}
+	case errors.Is(err, fs.ErrNotExist):
+		// If Stat returns not exist, treat as already deleted for files (terminal=true)
+		if info.IsTerminal {
+			// File does not exist, idempotent
 			return nil
+		} else {
+			childKeys, listErr := s.List(ctx, key, true)
+			if listErr != nil {
+				// If listing fails, treat as already deleted
+				return nil
+			}
+			if len(childKeys) == 0 {
+				return nil
+			}
+			keysToDelete = childKeys
 		}
-		return fmt.Errorf("deleting blob %s: %w", key, err)
+	default:
+		return fmt.Errorf("stat for delete %s: %w", key, err)
+	}
+
+	var deleteErrs []string
+	for _, delKey := range keysToDelete {
+		blobClient := s.containerClient.NewBlobClient(delKey)
+		_, err := blobClient.Delete(ctx, nil)
+		if err != nil {
+			var responseError *azcore.ResponseError
+			if errors.As(err, &responseError) && responseError.StatusCode == 404 {
+				continue // Already deleted
+			}
+			deleteErrs = append(deleteErrs, fmt.Sprintf("%s: %v", delKey, err))
+		}
+	}
+	if len(deleteErrs) > 0 {
+		return fmt.Errorf("errors deleting blobs: %s", strings.Join(deleteErrs, "; "))
 	}
 	return nil
 }
@@ -217,6 +245,8 @@ func (s *Storage) Stat(ctx context.Context, key string) (certmagic.KeyInfo, erro
 		// Check if blob doesn't exist
 		var responseError *azcore.ResponseError
 		if errors.As(err, &responseError) && responseError.StatusCode == 404 {
+			// This will return a KeyInfo with IsTerminal=false
+			// which is appropriate for non-existent keys on Azure blob (could be a directory or a missing file)
 			return keyInfo, fs.ErrNotExist
 		}
 		return keyInfo, fmt.Errorf("getting properties for %s: %w", key, err)
