@@ -75,7 +75,7 @@ func TestAzureBlobStorageOperations(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, key, info.Key)
 	assert.Equal(t, int64(len(content)), info.Size)
-	assert.True(t, info.IsTerminal) // files are terminal
+	assert.True(t, info.IsTerminal, "Stat should indicate file") // files are terminal
 	assert.False(t, info.Modified.IsZero())
 
 	// Test Delete operation
@@ -773,4 +773,26 @@ func TestRenewLockLeaseRestartsBackgroundRenewal(t *testing.T) {
 	err = contender.Lock(shortCtx, key)
 	require.ErrorIs(t, err, context.DeadlineExceeded,
 		"Contender should be blocked because restarted background renewal kept the lease alive")
+}
+
+// Test context cancellation for Store, Delete, Stat
+func TestContextCancellationForStoreDeleteStat(t *testing.T) {
+	s := setupTestStorage(t)
+	ctx := context.Background()
+	key := "cancel-test/file.txt"
+	content := []byte("cancel test content")
+
+	// Store with cancelled context
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	err := s.Store(cancelCtx, key, content)
+	assert.Error(t, err, "Store should honor context cancellation")
+
+	// Delete with cancelled context
+	err = s.Delete(cancelCtx, key)
+	assert.Error(t, err, "Delete should honor context cancellation")
+
+	// Stat with cancelled context
+	_, err = s.Stat(cancelCtx, key)
+	assert.Error(t, err, "Stat should honor context cancellation")
 }
