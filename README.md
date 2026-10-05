@@ -122,7 +122,28 @@ This module supports several Azure authentication methods:
    }
    ```
 
-3. **Environment Variables**
+3. **Service Principal (SPN)**
+
+   Service principal authentication is supported through Azure's default credential chain. Assign the SPN the `Storage Blob Data Contributor` role on the storage account or container, then set its credentials:
+
+   ```sh
+   export AZURE_TENANT_ID="YOUR_TENANT_ID"
+   export AZURE_CLIENT_ID="YOUR_CLIENT_ID"
+   export AZURE_CLIENT_SECRET="YOUR_CLIENT_SECRET"
+   ```
+
+   Configure the storage account and container in your `Caddyfile`; leave out `connection_string`:
+
+   ```caddy
+   {
+     storage azureblob {
+        account_name YOUR_STORAGE_ACCOUNT
+        container_name caddy-data
+     }
+   }
+   ```
+
+4. **Environment Variables**
 
    Set these environment variables:
 
