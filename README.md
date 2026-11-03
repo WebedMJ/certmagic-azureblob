@@ -66,6 +66,12 @@ In this section, we create a Caddy config using our Azure Blob Storage backend.
    xcaddy run
    ```
 
+   or
+
+   ```console
+   dotenv run xcaddy run
+   ```
+
 5. **Check that it works**
 
    ```console
