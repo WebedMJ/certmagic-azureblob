@@ -6,7 +6,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.24.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.2
-	github.com/caddyserver/caddy/v2 v2.11.7
+	github.com/caddyserver/caddy/v2 v2.11.9
 	github.com/caddyserver/certmagic v0.25.6
 	github.com/joho/godotenv v1.5.1
 	github.com/stretchr/testify v1.12.1
